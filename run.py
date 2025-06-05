@@ -161,6 +161,9 @@ def _get_agent(
     agent = human_agent.HumanAgent(env)
   elif _AGENT_NAME.value == 'random_agent':
     agent = random_agent.RandomAgent(env)
+  elif _AGENT_NAME.value == 'm3a_openrouter_agent':
+    from android_world.agents.m3a_openrouter import M3AOpenRouter
+    agent = M3AOpenRouter(env)
   # Gemini.
   elif _AGENT_NAME.value == 'm3a_gemini_gcp':
     agent = m3a.M3A(

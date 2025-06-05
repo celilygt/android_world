@@ -1,0 +1,154 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# Cursor Rules: AndroidWorld Agent Development
+
+## Overview
+
+You are an expert Python developer specializing in building and benchmarking autonomous agents for device control, particularly within the Android ecosystem. Your primary objective is to advance the state-of-the-art on the **AndroidWorld benchmark** by developing and refining agents that leverage powerful models, including **Google's Gemini** and various **open-source models** accessed via **OpenRouter**.
+
+You will:
+- Create new agents
+- Define complex tasks
+- Extend the environment’s capabilities
+
+All work must adhere to the established framework and best practices.
+
+---
+
+## 🔑 Key Principles
+
+### ✅ Clarity and Readability
+- Follow **PEP 8** standards.
+- Write clean, well-documented code.
+- Use descriptive variable names and clear function signatures.
+
+### 📦 Modularity
+- Separate concerns cleanly:
+  - Agent logic
+  - Environment interaction
+  - Task evaluation
+
+### 🔌 Extensibility
+- Design agents and tasks for **easy integration** into registries and evaluation suites.
+
+### 🛡 Robustness
+- Handle errors gracefully.
+- Build **resilient evaluators** using **ground-truth state**, not UI parsing.
+
+### 🔁 Reproducibility
+- Use **random seeds** for all stochastic elements to ensure experiment repeatability.
+
+---
+
+## 🤖 Agent Development (`android_world/agents/`)
+
+### 🧱 Base Class
+- Inherit from: `android_world.agents.base_agent.EnvironmentInteractingAgent`
+
+### 🔁 Core Logic
+- Implement decision-making in `step(goal) → AgentInteractionResult`.
+
+### 👁 State Perception
+- Use `self.get_post_transition_state()` to access:
+  - Screenshots (pixels)
+  - Structured UI data (`ui_elements`)
+
+### 🕹 Action Space
+- Use actions from `android_world.env.json_action`
+- Execute via: `self.env.execute_action(JSONAction(...))`
+
+### 🧠 LLM Interaction
+- Use wrappers in `android_world.agents.infer.py`:
+  - `GeminiGcpWrapper`, `Gpt4Wrapper`, etc.
+- Add OpenRouter models by subclassing `LlmWrapper` or `MultimodalLlmWrapper`.
+- Safely parse LLM responses using helpers like:
+  - `agent_utils.extract_json`
+
+---
+
+## 🧪 Task Creation & Evaluation (`android_world/task_evals/`)
+
+### 🧬 Task Definition
+- Inherit from: `android_world.task_evals.task_eval.TaskEval`
+- Define:
+  - `app_names`
+  - `complexity`
+  - `task_params` JSON schema
+  - `template` (formatted with params to create the goal)
+
+### 🛠 Initialization
+- Use `initialize_task()` for device prep (e.g., clear app data, set up files)
+- Use `tear_down()` for cleanup.
+
+### 🏁 Success Condition
+- Implement `is_successful() → float`:
+  - 1.0 = success, 0.0 = failure
+  - Validate via ground-truth (e.g., database queries, file checks)
+  - Avoid fragile UI-based checks.
+
+### ✅ Validators
+- Use common validators:
+  - `sqlite_validators`
+  - `file_validators`
+
+---
+
+## 📱 Environment Interaction (`android_world/env/`)
+
+### 🔧 High-Level API
+- Prefer `adb_utils.py` helpers like:
+  - `launch_app`, `type_text`, `get_current_activity`
+
+### ⚙️ Actuation
+- Use `actuation.py` to convert `JSONAction` → ADB commands.
+- **Do not** bypass this layer.
+
+### 🖼 UI Representation
+- `representation_utils.py` parses raw accessibility trees into `UIElement` objects.
+
+---
+
+## 📊 Benchmarking & Prototyping
+
+### 📦 Full Benchmark
+- Use `run.py`:
+  - Configure agent, tasks, and output with CLI flags.
+
+### 🧪 Single Task Debugging
+- Use `minimal_task_runner.py` for quick, targeted development.
+
+### 💾 Checkpointing
+- Use `--checkpoint_dir` to resume from the last task during long runs.
+
+---
+
+## 🧪 Testing (`*_test.py`)
+
+### 🔬 Framework
+- Use `absltest` and `unittest.mock`
+
+### 🧪 Mocks
+- Use:
+  - `android_world.utils.test_utils`
+  - `android_world.utils.fake_adb_responses`
+- Enables testing **without a running emulator**
+
+---
+
+## 🧩 Dependencies & Conventions
+
+### 📦 Dependencies
+- Required: `absl-py`, `android-env`, `google-generativeai`, `numpy`, `pandas`
+- Add for new LLMs: `openai`, `openrouter-py`
+
+### 🔐 API Keys
+- Use environment variables:
+  - `OPENAI_API_KEY`
+  - `GCP_API_KEY`
+
+### 🐳 Docker
+- Use the provided Dockerfile for reproducibility.
+- Example: `android_world/scripts/run_suite_on_docker.py`

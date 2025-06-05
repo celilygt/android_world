@@ -101,6 +101,112 @@ SAFETY_SETTINGS_BLOCK_NONE = {
 }
 
 
+class OpenRouterWrapper(LlmWrapper, MultimodalLlmWrapper):
+  """OpenRouter AI wrapper for free open-source models.
+
+  Attributes:
+    openrouter_api_key: The OpenRouter API key from environment variable.
+    max_retry: Max number of retries when some error happens.
+    temperature: The temperature parameter in LLM to control result stability.
+    model: Model to use (defaults to free Gemma 3-27B).
+    site_url: Optional site URL for rankings on openrouter.ai.
+    site_name: Optional site name for rankings on openrouter.ai.
+  """
+
+  RETRY_WAITING_SECONDS = 20
+
+  def __init__(
+      self,
+      model_name: str = "google/gemma-3-27b-it:free",
+      max_retry: int = 3,
+      temperature: float = 0.0,
+      site_url: str = None,
+      site_name: str = None,
+  ):
+    if 'OPENROUTER_API_KEY' not in os.environ:
+      raise RuntimeError('OpenRouter API key not set. Please set OPENROUTER_API_KEY environment variable.')
+    self.openrouter_api_key = os.environ['OPENROUTER_API_KEY']
+    if max_retry <= 0:
+      max_retry = 3
+      print('Max_retry must be positive. Reset it to 3')
+    self.max_retry = min(max_retry, 5)
+    self.temperature = temperature
+    self.model = model_name
+    self.site_url = site_url or "https://github.com/google-research/android_world"
+    self.site_name = site_name or "AndroidWorld"
+
+  @classmethod
+  def encode_image(cls, image: np.ndarray) -> str:
+    return base64.b64encode(array_to_jpeg_bytes(image)).decode('utf-8')
+
+  def predict(
+      self,
+      text_prompt: str,
+  ) -> tuple[str, Optional[bool], Any]:
+    return self.predict_mm(text_prompt, [])
+
+  def predict_mm(
+      self, text_prompt: str, images: list[np.ndarray]
+  ) -> tuple[str, Optional[bool], Any]:
+    headers = {
+        'Content-Type': 'application/json',
+        'Authorization': f'Bearer {self.openrouter_api_key}',
+        'HTTP-Referer': self.site_url,
+        'X-Title': self.site_name,
+    }
+
+    payload = {
+        'model': self.model,
+        'temperature': self.temperature,
+        'messages': [{
+            'role': 'user',
+            'content': [
+                {'type': 'text', 'text': text_prompt},
+            ],
+        }],
+        'max_tokens': 1000,
+    }
+
+    # Add images to the content list (similar to OpenAI format)
+    for image in images:
+      payload['messages'][0]['content'].append({
+          'type': 'image_url',
+          'image_url': {
+              'url': f'data:image/jpeg;base64,{self.encode_image(image)}'
+          },
+      })
+
+    counter = self.max_retry
+    wait_seconds = self.RETRY_WAITING_SECONDS
+    while counter > 0:
+      try:
+        response = requests.post(
+            'https://openrouter.ai/api/v1/chat/completions',
+            headers=headers,
+            json=payload,
+        )
+        if response.ok and 'choices' in response.json():
+          return (
+              response.json()['choices'][0]['message']['content'],
+              None,  # OpenRouter doesn't provide safety classification like Gemini
+              response,
+          )
+        print(
+            'Error calling OpenRouter API with error message: '
+            + str(response.json().get('error', {}).get('message', 'Unknown error'))
+        )
+        time.sleep(wait_seconds)
+        wait_seconds *= 2
+      except Exception as e:  # pylint: disable=broad-exception-caught
+        # Want to catch all exceptions happened during LLM calls.
+        time.sleep(wait_seconds)
+        wait_seconds *= 2
+        counter -= 1
+        print('Error calling OpenRouter LLM, will retry soon...')
+        print(e)
+    return ERROR_CALLING_LLM, None, None
+
+
 class GeminiGcpWrapper(LlmWrapper, MultimodalLlmWrapper):
   """Gemini GCP interface."""
 

@@ -101,4 +101,10 @@ task:
 # ENVIRONMENT CONFIGURATION
 # =============================================================================
 environment:
-  console_port: 5554 
+  console_port: 5554
+  emulator_log_path: "emulator.log"
+  # Path to the Android SDK root directory.
+  # The script will use this to find the emulator and adb.
+  # The '~' character for home directory is supported.
+  android_sdk_root: "~/Library/Android/sdk"
+  

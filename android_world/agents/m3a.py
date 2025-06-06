@@ -17,7 +17,7 @@
 import time
 from android_world.agents import agent_utils
 from android_world.agents import base_agent
-from android_world.agents import infer
+from android_world.agents import llm_wrappers
 from android_world.agents import m3a_utils
 from android_world.env import interface
 from android_world.env import json_action
@@ -335,7 +335,7 @@ class M3A(base_agent.EnvironmentInteractingAgent):
   def __init__(
       self,
       env: interface.AsyncEnv,
-      llm: infer.MultimodalLlmWrapper,
+      llm: llm_wrappers.MultimodalLlmWrapper,
       name: str = 'M3A',
       wait_after_action_seconds: float = 2.0,
   ):

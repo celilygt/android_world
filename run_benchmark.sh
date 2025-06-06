@@ -133,6 +133,9 @@ fi
 export PATH="$PATH:~/Library/Android/sdk/platform-tools"
 export PATH="$PATH:~/Library/Android/sdk/emulator"
 
+# Force Python unbuffered output to prevent buffering issues in pipelines
+export PYTHONUNBUFFERED=1
+
 # Function to check if emulator is running
 check_emulator() {
     adb devices 2>/dev/null | grep -q "emulator" && return 0 || return 1
@@ -433,39 +436,100 @@ fi
 # Create temporary output file
 TEMP_OUTPUT=$(mktemp)
 
+# Function to handle graceful shutdown
+cleanup() {
+    echo ""
+    echo "🛑 Interrupt received. Gracefully shutting down..."
+    echo "📊 Processing accumulated results..."
+    
+    # Kill the Python process if it's still running
+    if [ ! -z "$PYTHON_PID" ]; then
+        echo "⏹️  Stopping Python process (PID: $PYTHON_PID)..."
+        kill -TERM "$PYTHON_PID" 2>/dev/null || true
+        sleep 2
+        kill -KILL "$PYTHON_PID" 2>/dev/null || true
+    fi
+    
+    # Parse and save whatever results we have
+    if [ -f "$TEMP_OUTPUT" ] && [ -s "$TEMP_OUTPUT" ]; then
+        echo "💾 Saving partial results..."
+        parse_and_save_results "$TEMP_OUTPUT"
+    else
+        echo "⚠️  No results to save."
+    fi
+    
+    # Cleanup
+    rm -f "$TEMP_OUTPUT"
+    exit 130  # Standard exit code for Ctrl+C
+}
+
+# Set up signal handlers
+trap cleanup SIGINT SIGTERM
+
 # Run based on mode
 if [ "$MODE" = "fast" ]; then
     echo "⚡ Running fast mode with M3A $(echo "$AGENT_TYPE" | tr '[:lower:]' '[:upper:]') Agent..."
     if [ -n "$SPECIFIC_TASK" ]; then
         echo "🎯 Task: $SPECIFIC_TASK"
-        python "$FAST_RUNNER" --task="$SPECIFIC_TASK" 2>&1 | tee "$TEMP_OUTPUT"
+        python -u "$FAST_RUNNER" --task="$SPECIFIC_TASK" --verbose=True 2>&1 | \
+            grep --line-buffered -v "recvmsg encountered uncommon error: Message too long" | \
+            grep --line-buffered -v "tcp_posix.cc" | \
+            grep --line-buffered -v "E0000.*trace.cc.*Unknown tracer" | \
+            tee "$TEMP_OUTPUT" &
+        PYTHON_PID=$!
+        wait $PYTHON_PID
     else
         echo "🎲 Random task selection"
-        python "$FAST_RUNNER" 2>&1 | tee "$TEMP_OUTPUT"
+        python -u "$FAST_RUNNER" --verbose=True 2>&1 | \
+            grep --line-buffered -v "recvmsg encountered uncommon error: Message too long" | \
+            grep --line-buffered -v "tcp_posix.cc" | \
+            grep --line-buffered -v "E0000.*trace.cc.*Unknown tracer" | \
+            tee "$TEMP_OUTPUT" &
+        PYTHON_PID=$!
+        wait $PYTHON_PID
     fi
 else
     echo "🎯 Running full benchmark with M3A $(echo "$AGENT_TYPE" | tr '[:lower:]' '[:upper:]') Agent..."
     if [ -n "$SPECIFIC_TASK" ]; then
         echo "🎯 Task: $SPECIFIC_TASK"
-        python run.py \
+        python -u run.py \
             --suite_family=android_world \
             --agent_name="$AGENT_NAME" \
             --tasks="$SPECIFIC_TASK" \
-            --n_task_combinations=1 2>&1 | tee "$TEMP_OUTPUT"
+            --n_task_combinations=1 \
+            --verbose=True 2>&1 | \
+            grep --line-buffered -v "recvmsg encountered uncommon error: Message too long" | \
+            grep --line-buffered -v "tcp_posix.cc" | \
+            grep --line-buffered -v "E0000.*trace.cc.*Unknown tracer" | \
+            tee "$TEMP_OUTPUT" &
+        PYTHON_PID=$!
+        wait $PYTHON_PID
     else
-        python run.py \
+        python -u run.py \
             --suite_family=android_world \
             --agent_name="$AGENT_NAME" \
-            --n_task_combinations=1 2>&1 | tee "$TEMP_OUTPUT"
+            --n_task_combinations=1 \
+            --verbose=True 2>&1 | \
+            grep --line-buffered -v "recvmsg encountered uncommon error: Message too long" | \
+            grep --line-buffered -v "tcp_posix.cc" | \
+            grep --line-buffered -v "E0000.*trace.cc.*Unknown tracer" | \
+            tee "$TEMP_OUTPUT" &
+        PYTHON_PID=$!
+        wait $PYTHON_PID
             #Zum beispiel : Parameter = 3 => with 116 tasks × 3 combinations = 348 total task instances to run!
     fi
 fi
 
-# Parse and save results
-parse_and_save_results "$TEMP_OUTPUT"
+# Parse and save results (only if we weren't interrupted)
+if [ -f "$TEMP_OUTPUT" ] && [ -s "$TEMP_OUTPUT" ]; then
+    parse_and_save_results "$TEMP_OUTPUT"
+fi
 
 # Cleanup
-rm "$TEMP_OUTPUT"
+rm -f "$TEMP_OUTPUT"
+
+# Remove signal handlers
+trap - SIGINT SIGTERM
 
 echo "🎉 Benchmark completed!"
 echo "📊 Results saved to: ./runs/" 

@@ -37,6 +37,9 @@ logging.set_verbosity(logging.WARNING)
 
 os.environ['GRPC_VERBOSITY'] = 'ERROR'  # Only show errors
 os.environ['GRPC_TRACE'] = 'none'  # Disable tracing
+# Additional gRPC error suppression
+os.environ['GRPC_ENABLE_FORK_SUPPORT'] = '0'
+os.environ['GRPC_POLL_STRATEGY'] = 'poll'
 
 
 def _find_adb_directory() -> str:
@@ -172,10 +175,15 @@ def _main() -> None:
       temperature=_TEMPERATURE.value,
       max_retry=_MAX_RETRY.value,
       wait_after_action_seconds=_WAIT_AFTER_ACTION.value,
+      verbose=_VERBOSE.value,
   )
 
   print('Goal: ' + str(task.goal))
   print(f"🎯 Max steps allowed: {int(task.complexity * 10)}")
+  print(f"📋 Current Task: {task_type.__name__}")
+  print(f"🤖 Model: {_MODEL_NAME.value}")
+  print(f"🎮 Agent: M3A OpenRouter")
+  print("=" * 80)
   
   is_done = False
   max_steps = int(task.complexity * 10)
@@ -195,8 +203,8 @@ def _main() -> None:
         print(f"✅ Agent indicated task completion at step {step + 1}")
         break
         
-      if _VERBOSE.value and 'summary' in response.step_data:
-        print(f"Step summary: {response.step_data['summary']}")
+      if _VERBOSE.value and 'summary' in response.data:
+        print(f"Step summary: {response.data['summary']}")
         
     except Exception as e:
       print(f"❌ Error during step {step + 1}: {str(e)}")

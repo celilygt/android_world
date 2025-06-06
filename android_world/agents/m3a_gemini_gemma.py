@@ -49,6 +49,7 @@ class M3AGeminiGemma(base_agent.EnvironmentInteractingAgent):
       temperature: float = 0.0,
       top_p: float = 0.95,
       enable_safety_checks: bool = True,
+      verbose: bool = True,
   ):
     """Initializes a M3A Agent using Gemini API with Gemma model.
 
@@ -62,6 +63,7 @@ class M3AGeminiGemma(base_agent.EnvironmentInteractingAgent):
       temperature: Temperature for LLM generation.
       top_p: Top-p sampling parameter.
       enable_safety_checks: Whether to enable Gemini safety checks.
+      verbose: Whether to enable verbose output during agent execution.
     """
     super().__init__(env, name)
     
@@ -77,6 +79,7 @@ class M3AGeminiGemma(base_agent.EnvironmentInteractingAgent):
     self.history = []
     self.additional_guidelines = None
     self.wait_after_action_seconds = wait_after_action_seconds
+    self.verbose = verbose
 
   def set_task_guidelines(self, task_guidelines: list[str]) -> None:
     self.additional_guidelines = task_guidelines
@@ -138,6 +141,10 @@ class M3AGeminiGemma(base_agent.EnvironmentInteractingAgent):
         self.additional_guidelines,
     )
     step_data['action_prompt'] = action_prompt
+    
+    if self.verbose:
+      print(f"🤖 LLM Call: Requesting action for goal: {goal[:100]}{'...' if len(goal) > 100 else ''}")
+      
     action_output, is_safe, raw_response = self.llm.predict_mm(
         action_prompt,
         [
@@ -146,22 +153,38 @@ class M3AGeminiGemma(base_agent.EnvironmentInteractingAgent):
         ],
     )
 
+    if self.verbose:
+      print(f"🔍 LLM Call Result: action_output={action_output is not None}, is_safe={is_safe}, raw_response={raw_response is not None}")
+
     # Handle Gemini safety classification
     if is_safe == False:  # pylint: disable=singleton-comparison
       action_output = f"""Reason: {m3a_utils.TRIGGER_SAFETY_CLASSIFIER}
 Action: {{"action_type": "status", "goal_status": "infeasible"}}"""
 
     if not raw_response:
+      if self.verbose:
+        print(f"❌ LLM call failed - raw_response is None")
+        print(f"   action_output: {action_output}")
+        print(f"   is_safe: {is_safe}")
       raise RuntimeError('Error calling LLM in action selection phase.')
+    
+    if self.verbose:
+      print(f"✅ LLM call successful")
+      
     step_data['action_output'] = action_output
     step_data['action_raw_response'] = raw_response
 
     reason, action = m3a_utils.parse_reason_action_output(action_output)
 
+    # Always show action and reason output
+    print(f"\n🎯 STEP {len(self.history) + 1} RESULTS:")
+    print(f"Action: {action}")
+    print(f"Reason: {reason}")
+
     # If the output is not in the right format, add it to step summary which
     # will be passed to next step and return.
     if (not reason) or (not action):
-      print('Action prompt output is not in the correct format.')
+      print('❌ Action prompt output is not in the correct format.')
       step_data['summary'] = (
           'Output for action selection is not in the correct format, so no'
           ' action is performed.'
@@ -172,9 +195,29 @@ Action: {{"action_type": "status", "goal_status": "infeasible"}}"""
           False,
           step_data,
       )
+    
+    if self.verbose:
+      # Handle GenerateContentResponse object properly
+      raw_text = ""
+      if raw_response:
+        try:
+          # Try to get the text content from the GenerateContentResponse
+          if hasattr(raw_response, 'text'):
+            raw_text = raw_response.text
+          elif hasattr(raw_response, 'candidates') and raw_response.candidates:
+            # Extract text from candidates if available
+            candidate = raw_response.candidates[0]
+            if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
+              raw_text = ''.join([part.text for part in candidate.content.parts if hasattr(part, 'text')])
+          else:
+            raw_text = str(raw_response)
+        except Exception:
+          raw_text = str(raw_response)
+      
+      print(f"📝 LLM Raw Response: {raw_text[:300]}{'...' if len(raw_text) > 300 else ''}")
+      print(f"💭 Full Action Output: {action_output}")
+      print("=" * 80)
 
-    print('Action: ' + action)
-    print('Reason: ' + reason)
     step_data['action_reason'] = reason
 
     try:

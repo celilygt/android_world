@@ -35,7 +35,7 @@ run:
 # =============================================================================
 agent:
   # Specifies which agent configuration to use from the `configurations` block below.
-  active_agent: "m3a_gemini"
+  active_agent: "m3a_ollama"
 
   # --- Agent-Specific Settings ---
   # Each agent has its own configuration block. The script will only use the
@@ -83,6 +83,31 @@ agent:
       
       # Whether to enable the built-in Gemini safety checks.
       enable_safety_checks: true
+
+    
+    # Configuration for the M3A Ollama agent (local models)
+    m3a_ollama:
+      # This name must match the agent's name in the registry.
+      registry_name: "m3a_ollama_agent"
+      
+      # The specific Ollama model to use (must be available locally).
+      # Popular choices: "gemma3:4b", "llama3.1:8b", "qwen2.5:7b"
+      model_name: "gemma3:4b"
+      
+      # LLM generation temperature.
+      temperature: 0.0
+      
+      # Max number of retries for API calls.
+      max_retry: 3
+      
+      # Seconds to wait for UI to stabilize after an action.
+      wait_after_action_seconds: 2.0
+      
+      # Ollama host (usually localhost for local inference).
+      host: "localhost"
+      
+      # Ollama port (default: 11434).
+      port: 11434
 
 
 # =============================================================================

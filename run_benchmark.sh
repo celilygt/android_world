@@ -106,10 +106,44 @@ check_api_keys() {
     elif [[ "$agent_registry_name" == *"gemini"* ]] && [ -z "$GEMINI_API_KEY" ]; then
         echo -e "${C_RED}❌ GEMINI_API_KEY is not set for agent '$agent_registry_name'.${C_NC}"
         exit 1
+    elif [[ "$agent_registry_name" == *"ollama"* ]]; then
+        echo -e "${C_GREEN}✅ Using Ollama (no API key required).${C_NC}"
+        return 0
     fi
     echo -e "${C_GREEN}✅ API key for $agent_registry_name found.${C_NC}"
 }
 check_api_keys
+
+# --- Ollama Management ---
+OLLAMA_PID=
+check_ollama() { curl -s "http://localhost:11434/api/tags" >/dev/null 2>&1; }
+start_ollama() {
+    if [[ "$agent_registry_name" == *"ollama"* ]]; then
+        if ! check_ollama; then
+            echo -e "${C_YELLOW}🦙 Starting Ollama...${C_NC}"
+            if command -v ollama &> /dev/null; then
+                nohup ollama serve > "ollama.log" 2>&1 &
+                OLLAMA_PID=$!
+                echo "⏳ Waiting for Ollama to start..."
+                for ((i=0; i<30; i++)); do # Wait up to 30 seconds
+                    if check_ollama; then
+                        echo -e "${C_GREEN}✅ Ollama is running.${C_NC}"
+                        return 0
+                    fi
+                    sleep 1
+                done
+                echo -e "${C_RED}❌ Ollama failed to start within 30 seconds.${C_NC}"
+                exit 1
+            else
+                echo -e "${C_RED}❌ Ollama not found. Please install from https://ollama.com${C_NC}"
+                exit 1
+            fi
+        else
+            echo -e "${C_GREEN}✅ Ollama is already running.${C_NC}"
+        fi
+    fi
+}
+start_ollama
 
 
 # --- Environment Setup ---
@@ -239,6 +273,11 @@ trap '
   echo -e "\n${C_RED}🛑 Interrupted. Killing process tree...${C_NC}"
   # Kill the entire process group started by the script
   [ ! -z "$PID" ] && kill -- -"$PID" 2>/dev/null
+  # Kill Ollama if we started it
+  if [ ! -z "$OLLAMA_PID" ]; then
+    echo -e "${C_YELLOW}🦙 Stopping Ollama...${C_NC}"
+    kill "$OLLAMA_PID" 2>/dev/null || true
+  fi
   echo -e "${C_YELLOW}Logs saved to $LOG_FILE${C_NC}"
   exit 130
 ' SIGINT SIGTERM
@@ -250,6 +289,13 @@ trap '
   PID=$!
   wait $PID
 ) 2>&1 | tee "$LOG_FILE" | grep -v "Raw LLM Response"
+
+# Cleanup Ollama if we started it
+if [ ! -z "$OLLAMA_PID" ]; then
+  echo -e "${C_YELLOW}🦙 Stopping Ollama...${C_NC}"
+  kill "$OLLAMA_PID" 2>/dev/null || true
+  wait "$OLLAMA_PID" 2>/dev/null || true
+fi
 
 echo -e "${C_GREEN}🎉 Benchmark completed! Full output log is at: $LOG_FILE${C_NC}"
 exit 0 

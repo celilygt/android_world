@@ -78,7 +78,7 @@ _TASK = flags.DEFINE_string(
 )
 _AGENT_NAME = flags.DEFINE_string(
     'agent_name',
-    'm3a_openrouter_agent',
+    'm3a_ollama_agent',
     'The agent to use for the task.',
 )
 _VERBOSE = flags.DEFINE_boolean(
@@ -105,6 +105,10 @@ _ENABLE_SAFETY_CHECKS = flags.DEFINE_boolean(
     'enable_safety_checks', True, 'Enable Gemini safety checks.'
 )
 
+# --- Ollama-Specific Flags ---
+_HOST = flags.DEFINE_string('host', 'localhost', 'Ollama host.')
+_PORT = flags.DEFINE_integer('port', 11434, 'Ollama port.')
+
 
 def _check_api_keys():
     """Check for necessary API keys based on the selected agent."""
@@ -118,6 +122,8 @@ def _check_api_keys():
             print("❌ GEMINI_API_KEY not set.")
             sys.exit(1)
         print("✅ Gemini API key found.")
+    elif 'ollama' in _AGENT_NAME.value.lower():
+        print("✅ Using Ollama (no API key required).")
 
 
 def _get_agent(env: interface.AsyncEnv) -> base_agent.EnvironmentInteractingAgent:
@@ -134,6 +140,8 @@ def _get_agent(env: interface.AsyncEnv) -> base_agent.EnvironmentInteractingAgen
         'wait_after_action_seconds': _WAIT_AFTER_ACTION.value,
         'top_p': _TOP_P.value,
         'enable_safety_checks': _ENABLE_SAFETY_CHECKS.value,
+        'host': _HOST.value,
+        'port': _PORT.value,
     }
     # Handle model_name separately since it has defaults.
     if _MODEL_NAME.value:

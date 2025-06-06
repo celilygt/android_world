@@ -19,4 +19,5 @@ from android_world.agents.llm_wrappers.base_wrapper import MultimodalLlmWrapper
 from android_world.agents.llm_wrappers.gemini_gcp_wrapper import GeminiGcpWrapper
 from android_world.agents.llm_wrappers.gemini_gemma_wrapper import GeminiGemmaWrapper
 from android_world.agents.llm_wrappers.gpt4_wrapper import Gpt4Wrapper
+from android_world.agents.llm_wrappers.ollama_wrapper import OllamaWrapper
 from android_world.agents.llm_wrappers.openrouter_wrapper import OpenRouterWrapper 

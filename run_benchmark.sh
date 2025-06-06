@@ -1,535 +1,255 @@
 #!/bin/bash
 
-# AndroidWorld Benchmark Runner Script
-# This script sets up the environment and runs the benchmark with M3A agents
-# Usage: ./run_benchmark.sh [fast|full] [task_name] [--agent=AGENT_TYPE]
+# AndroidWorld Benchmark Runner Script v3
+# This script orchestrates benchmark runs using a central YAML configuration.
+# It handles environment setup, agent configuration, and execution, with
+# improved logging, graceful shutdown, and conditional output visibility.
+#
+# Usage:
+#   ./run_benchmark.sh
+#   ./run_benchmark.sh --config=my_config.yaml
+#   ./run_benchmark.sh --override_agent=m3a_gemini
 
-set -e  # Exit on any error
+set -e # Exit on any error
 
-# Parse command line arguments
-MODE="full"  # default
-SPECIFIC_TASK=""
-AGENT_TYPE="gemini"  # default
+# --- Color Definitions ---
+C_RED='\033[0;31m'
+C_GREEN='\033[0;32m'
+C_YELLOW='\033[0;33m'
+C_BLUE='\033[0;34m'
+C_CYAN='\033[0;36m'
+C_NC='\033[0m' # No Color
 
-# Help function
+# --- Help Function ---
 show_help() {
     cat << EOF
 AndroidWorld Benchmark Runner
 =============================
+Uses 'config/default.yaml' or a custom config to run benchmarks.
 
-Usage: ./run_benchmark.sh [MODE] [TASK_NAME] [--agent=AGENT_TYPE]
-       ./run_benchmark.sh [TASK_NAME] [--agent=AGENT_TYPE]
-       ./run_benchmark.sh --help
+Usage: ./run_benchmark.sh [options]
 
-MODES:
-  fast    Run minimal runner (quick test)
-  full    Run full benchmark (default)
-
-AGENT TYPES:
-  openrouter    Use M3A OpenRouter Agent with free models (default)
-  gemini        Use M3A Gemini Agent with free Gemma 3-27B
-
-EXAMPLES:
-  ./run_benchmark.sh                                    # Full benchmark with OpenRouter
-  ./run_benchmark.sh --agent=gemini                     # Full benchmark with Gemini  
-  ./run_benchmark.sh fast --agent=openrouter            # Fast mode with OpenRouter
-  ./run_benchmark.sh fast ContactsAddContact --agent=gemini  # Fast mode with specific task and Gemini
-
-AVAILABLE TASKS:
-  ContactsAddContact, ClockStopWatchRunning, and many more...
-  (See AndroidWorld documentation for full task list)
-
-OUTPUT:
-  Results are saved to ./runs/ with timestamp:
-  - benchmark_summary_YYYYMMDD_HHMMSS.txt (parsed summary)
-  - benchmark_output_YYYYMMDD_HHMMSS.log (full output)
-
+Options:
+  --config=<path>     Path to a custom YAML config file.
+  --override_agent=<agent_key>
+                      Run with a different agent from the config, e.g., 'm3a_gemini'.
+  --help, -h          Show this help message.
 EOF
 }
 
-# Parse arguments
-while [ $# -gt 0 ]; do
-    case $1 in
-        --help|-h|help)
-            show_help
-            exit 0
-            ;;
-        --agent=*)
-            AGENT_TYPE="${1#*=}"
-            ;;
-        fast|full)
-            MODE=$1
-            ;;
-        *)
-            # Assume it's a task name if not recognized as other option
-            if [ -z "$SPECIFIC_TASK" ]; then
-                SPECIFIC_TASK=$1
-            fi
-            ;;
+# --- Prerequisite: yq ---
+check_yq() {
+    if ! command -v yq &> /dev/null; then
+        echo -e "${C_RED}❌ 'yq' is required. Please install it: https://github.com/mikefarah/yq/#install${C_NC}"
+        exit 1
+    fi
+}
+check_yq
+
+# --- Configuration Loading and Parsing ---
+CONFIG_FILE="config/default.yaml"
+OVERRIDE_AGENT=""
+
+for arg in "$@"; do
+    case $arg in
+        --config=*) CONFIG_FILE="${arg#*=}"; shift;;
+        --override_agent=*) OVERRIDE_AGENT="${arg#*=}"; shift;;
+        -h|--help) show_help; exit 0;;
     esac
-    shift
 done
 
-echo "🚀 Starting AndroidWorld Benchmark Setup..."
-echo "📋 Mode: $MODE"
-echo "🤖 Agent: $AGENT_TYPE"
-if [ -n "$SPECIFIC_TASK" ]; then
-    echo "🎯 Specific Task: $SPECIFIC_TASK"
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo -e "${C_RED}❌ Config file not found: $CONFIG_FILE${C_NC}"; exit 1
 fi
 
-# Check API keys based on agent type
-if [ "$AGENT_TYPE" = "openrouter" ]; then
-    if [ -z "$OPENROUTER_API_KEY" ]; then
-        echo "❌ OPENROUTER_API_KEY environment variable not set!"
-        echo ""
-        echo "📋 Setup Instructions:"
-        echo "1. Sign up at https://openrouter.ai (free)"
-        echo "2. Get your API key from the dashboard"
-        echo "3. Set the environment variable:"
-        echo "   export OPENROUTER_API_KEY='your_api_key_here'"
-        echo ""
-        echo "💡 Available free models:"
-        echo "   - google/gemma-3-27b-it:free (default)"
-        echo "   - meta-llama/llama-3.3-70b-instruct:free"
-        echo "   - mistralai/mistral-7b-instruct:free"
-        exit 1
-    else
-        echo "✅ OpenRouter API key found!"
-    fi
-elif [ "$AGENT_TYPE" = "gemini" ]; then
-    if [ -z "$GEMINI_API_KEY" ]; then
-        echo "❌ GEMINI_API_KEY environment variable not set!"
-        echo ""
-        echo "📋 Setup Instructions:"
-        echo "1. Get a free Gemini API key from https://aistudio.google.com/"
-        echo "2. Set the environment variable:"
-        echo "   export GEMINI_API_KEY='your_api_key_here'"
-        echo ""
-        echo "💡 Available free Gemma models:"
-        echo "   - gemma-3-27b-it (default)"
-        echo "   - gemma-3-9b-it"
-        echo ""
-        echo "🆓 Note: Gemma models on Gemini API have free usage quotas"
-        exit 1
-    else
-        echo "✅ Gemini API key found!"
-    fi
-else
-    echo "❌ Unknown agent type: $AGENT_TYPE"
-    echo "Available agent types: openrouter, gemini"
+# Load script and run settings
+eval "$(yq e '.script | to_entries | .[] | .key + "=\"" + .value + "\""' "$CONFIG_FILE")"
+eval "$(yq e '.run | to_entries | .[] | "run_" + .key + "=\"" + .value + "\""' "$CONFIG_FILE")"
+
+# Determine active agent and load its config
+active_agent_key="${OVERRIDE_AGENT:-$(yq e '.agent.active_agent' "$CONFIG_FILE")}"
+echo -e "${C_GREEN}✅ Active agent key: ${C_CYAN}$active_agent_key${C_NC}"
+
+YQ_AGENT_PATH=".agent.configurations.$active_agent_key"
+if [ "$(yq e "$YQ_AGENT_PATH" "$CONFIG_FILE")" = "null" ]; then
+    echo -e "${C_RED}❌ Agent configuration for '$active_agent_key' not found in $CONFIG_FILE${C_NC}"
     exit 1
 fi
+eval "$(yq e "$YQ_AGENT_PATH | to_entries | .[] | \"agent_\" + .key + \"=\\\"\" + .value + \"\\\"\"" "$CONFIG_FILE")"
 
-# Set runner script and agent name based on agent type
-if [ "$AGENT_TYPE" = "openrouter" ]; then
-    FAST_RUNNER="m3a_openrouter_minimal_runner.py"
-    AGENT_NAME="m3a_openrouter_agent"
-elif [ "$AGENT_TYPE" = "gemini" ]; then
-    FAST_RUNNER="m3a_gemini_gemma_minimal_runner.py"
-    AGENT_NAME="m3a_gemini_gemma_agent"
+# Load task and environment settings
+eval "$(yq e '.task | to_entries | .[] | "task_" + .key + "=\"" + .value + "\""' "$CONFIG_FILE")"
+eval "$(yq e '.environment | to_entries | .[] | "env_" + .key + "=\"" + .value + "\""' "$CONFIG_FILE")"
+
+# --- Setup Output Logging ---
+LOG_DIR="runs"
+mkdir -p "$LOG_DIR"
+TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+LOG_FILE="$LOG_DIR/${TIMESTAMP}_${active_agent_key}.log"
+touch "$LOG_FILE"
+
+
+# --- Display Final Configuration ---
+echo -e "${C_YELLOW}🚀 Starting AndroidWorld Benchmark...${C_NC}"
+echo -e "  ${C_BLUE}Agent:${C_NC} $agent_registry_name (from key '$active_agent_key')"
+echo -e "  ${C_BLUE}Run Mode:${C_NC} $run_mode"
+echo -e "  ${C_BLUE}Task:${C_NC} ${task_name:-Default (Random/All)}"
+echo -e "  ${C_BLUE}Log File:${C_NC} $LOG_FILE"
+echo "-----------------------------------------------------"
+
+
+# --- Check API Keys ---
+check_api_keys() {
+    if [[ "$agent_registry_name" == *"openrouter"* ]] && [ -z "$OPENROUTER_API_KEY" ]; then
+        echo -e "${C_RED}❌ OPENROUTER_API_KEY is not set for agent '$agent_registry_name'.${C_NC}"
+        exit 1
+    elif [[ "$agent_registry_name" == *"gemini"* ]] && [ -z "$GEMINI_API_KEY" ]; then
+        echo -e "${C_RED}❌ GEMINI_API_KEY is not set for agent '$agent_registry_name'.${C_NC}"
+        exit 1
+    fi
+    echo -e "${C_GREEN}✅ API key for $agent_registry_name found.${C_NC}"
+}
+check_api_keys
+
+
+# --- Environment Setup ---
+# Resolve Android SDK path from config, with a default, and expand tilde.
+sdk_path_unexpanded="${env_android_sdk_root:-~/Library/Android/sdk}"
+if [[ "${sdk_path_unexpanded:0:1}" == "~" ]]; then
+    sdk_path="${HOME}${sdk_path_unexpanded:1}"
+else
+    sdk_path="$sdk_path_unexpanded"
 fi
 
-# Add Android SDK tools to PATH
-export PATH="$PATH:~/Library/Android/sdk/platform-tools"
-export PATH="$PATH:~/Library/Android/sdk/emulator"
-
-# Force Python unbuffered output to prevent buffering issues in pipelines
+export PATH="$PATH:${sdk_path}/platform-tools:${sdk_path}/emulator"
 export PYTHONUNBUFFERED=1
+export GRPC_VERBOSITY=FATAL # Suppress noisy gRPC logs from emulator communication.
 
-# Function to check if emulator is running
-check_emulator() {
-    adb devices 2>/dev/null | grep -q "emulator" && return 0 || return 1
-}
+if [ "$activate_conda" = "true" ]; then
+    echo -e "${C_YELLOW}🔧 Activating conda environment: $conda_env_name...${C_NC}"
+    source /opt/anaconda3/etc/profile.d/conda.sh
+    conda activate "$conda_env_name"
+fi
 
-# Function to wait for emulator to be ready
-wait_for_emulator() {
-    echo "⏳ Waiting for emulator to be ready..."
-    local timeout=120  # 2 minutes timeout
-    local elapsed=0
-    
-    while [ $elapsed -lt $timeout ]; do
-        if adb shell getprop sys.boot_completed 2>/dev/null | grep -q "1"; then
-            echo "✅ Emulator is ready!"
-            return 0
-        fi
-        sleep 2
-        elapsed=$((elapsed + 2))
-        echo "   Waiting... (${elapsed}s/${timeout}s)"
-    done
-    
-    echo "❌ Timeout waiting for emulator to be ready"
-    return 1
-}
-
-# Function to check if emulator setup was completed
-check_emulator_setup_done() {
-    [ -f ".emulator_setup_completed" ]
-}
-
-# Function to check if user chose to skip setup forever
-check_skip_setup_forever() {
-    [ -f ".skip_emulator_setup_forever" ]
-}
-
-# Function to handle emulator setup
-handle_emulator_setup() {
-    # If user chose to skip forever, don't ask again
-    if check_skip_setup_forever; then
-        echo "⏭️  Emulator setup skipped (user preference saved)"
-        return 0
-    fi
-    
-    # If setup was already completed, give user options
-    if check_emulator_setup_done; then
-        echo ""
-        echo "🔧 Emulator Setup Status"
-        echo "========================"
-        echo "✅ Emulator setup appears to have been completed before."
-        echo ""
-        echo "What would you like to do?"
-        echo "  [s] Skip setup for this run (default)"
-        echo "  [r] Run setup again (re-initialize apps)"
-        echo "  [n] Never ask again (skip setup forever)"
-        echo ""
-        read -p "Choose option [s/r/n]: " -r setup_choice
-        
-        case $setup_choice in
-            r|R)
-                echo "🔄 Re-running emulator setup..."
-                return 1  # Signal to run setup
-                ;;
-            n|N)
-                echo "💾 Saving preference to skip emulator setup forever..."
-                touch ".skip_emulator_setup_forever"
-                return 0  # Skip setup
-                ;;
-            s|S|"")
-                echo "⏭️  Skipping emulator setup for this run..."
-                return 0  # Skip setup
-                ;;
-            *)
-                echo "⚠️  Invalid choice, skipping setup..."
-                return 0  # Skip setup
-                ;;
-        esac
-    else
-        # First time setup
-        echo ""
-        echo "🔧 Emulator Setup Required"
-        echo "=========================="
-        echo "⚠️  AndroidWorld emulator setup has not been completed yet."
-        echo "    This initializes required apps and should be run only once."
-        echo ""
-        echo "What would you like to do?"
-        echo "  [y] Run emulator setup now (recommended for first time)"
-        echo "  [s] Skip for now (you can run it later)"
-        echo "  [n] Never run setup (skip forever - not recommended)"
-        echo ""
-        read -p "Choose option [y/s/n]: " -r setup_choice
-        
-        case $setup_choice in
-            y|Y|"")
-                echo "🚀 Running emulator setup..."
-                return 1  # Signal to run setup
-                ;;
-            n|N)
-                echo "💾 Saving preference to skip emulator setup forever..."
-                touch ".skip_emulator_setup_forever"
-                return 0  # Skip setup
-                ;;
-            s|S)
-                echo "⏭️  Skipping emulator setup for this run..."
-                return 0  # Skip setup
-                ;;
-            *)
-                echo "⚠️  Invalid choice, skipping setup..."
-                return 0  # Skip setup
-                ;;
-        esac
-    fi
-}
-
-# Function to run emulator setup
-run_emulator_setup() {
-    echo "🔧 Running AndroidWorld emulator setup..."
-    echo "   This may take several minutes as it installs required apps..."
-    
-    # Use the selected agent for emulator setup too
-    if python run.py --perform_emulator_setup=True --agent_name="$AGENT_NAME"; then
-        echo "✅ Emulator setup completed successfully!"
-        touch ".emulator_setup_completed"
-        return 0
-    else
-        echo "❌ Emulator setup failed!"
-        return 1
-    fi
-}
-
-# Function to parse and save results
-parse_and_save_results() {
-    local output_file=$1
-    local timestamp=$(date +"%Y%m%d_%H%M%S")
-    local runs_dir="./runs"
-    local run_subfolder="$runs_dir/run_$timestamp"
-    local summary_file="$run_subfolder/benchmark_summary.txt"
-    local full_log_file="$run_subfolder/benchmark_output.log"
-    
-    # Create runs directory and run subfolder if they don't exist
-    mkdir -p "$run_subfolder"
-    
-    echo "📊 Parsing results and saving summary..."
-    
-    # Create summary file
-    cat > "$summary_file" << EOF
-AndroidWorld Benchmark Summary
-==============================
-Timestamp: $(date)
-Mode: $MODE
-Agent: M3A $(echo "$AGENT_TYPE" | tr '[:lower:]' '[:upper:]')
-$([ -n "$SPECIFIC_TASK" ] && echo "Specific Task: $SPECIFIC_TASK" || echo "Tasks: All available tasks")
-
-TASK RESULTS:
-=============
-EOF
-
-    # Parse the output for task results
-    local current_task=""
-    local current_goal=""
-    local step_count=0
-    local max_step=0
-    
-    while IFS= read -r line; do
-        if [[ $line == *"Running random task:"* ]]; then
-            current_task=$(echo "$line" | sed 's/.*Running random task: //')
-            echo "" >> "$summary_file"
-            echo "$current_task" >> "$summary_file"
-            echo "$(printf '=%.0s' {1..${#current_task}})" >> "$summary_file"
-        elif [[ $line == *"Running task:"* ]]; then
-            current_task=$(echo "$line" | sed 's/.*Running task: //')
-            echo "" >> "$summary_file"
-            echo "$current_task" >> "$summary_file"
-            echo "$(printf '=%.0s' {1..${#current_task}})" >> "$summary_file"
-        elif [[ $line == *"Goal:"* ]]; then
-            current_goal=$(echo "$line" | sed 's/Goal: //')
-            echo "Goal: $current_goal" >> "$summary_file"
-        elif [[ $line == *"Step "* && $line == *"..."* ]]; then
-            step_num=$(echo "$line" | grep -o 'Step [0-9]*' | grep -o '[0-9]*')
-            if [ -n "$step_num" ] && [ "$step_num" -gt "$max_step" ]; then
-                max_step=$step_num
-            fi
-        elif [[ $line == *"Task Failed ❌"* ]]; then
-            echo "Result: ❌ Failed" >> "$summary_file"
-            echo "Steps completed: $max_step" >> "$summary_file"
-            if [[ $line == *";"* ]]; then
-                failure_reason=$(echo "$line" | sed 's/.*; //')
-                echo "Task description: $failure_reason" >> "$summary_file"
-            fi
-            max_step=0
-        elif [[ $line == *"Task Passed ✅"* ]]; then
-            echo "Result: ✅ Passed" >> "$summary_file"
-            echo "Steps completed: $max_step" >> "$summary_file"
-            if [[ $line == *";"* ]]; then
-                success_info=$(echo "$line" | sed 's/.*; //')
-                echo "Task description: $success_info" >> "$summary_file"
-            fi
-            max_step=0
-        elif [[ $line == *"Agent did not indicate task is done"* ]]; then
-            echo "Reason: Agent reached max steps without completing task" >> "$summary_file"
-        fi
-    done < "$output_file"
-    
-    # Add final statistics from the table if available
-    if grep -A 10 "mean_success_rate" "$output_file" > /dev/null 2>&1; then
-        echo "" >> "$summary_file"
-        echo "SUMMARY STATISTICS:" >> "$summary_file"
-        echo "==================" >> "$summary_file"
-        grep -A 20 "mean_success_rate" "$output_file" | head -10 >> "$summary_file"
-    fi
-    
-    # Count total tasks and success rate
-    local total_tasks=$(grep -c "Running.*task:" "$output_file" 2>/dev/null | tr -d '\n' || echo "0")
-    local passed_tasks=$(grep -c "Task Passed ✅" "$output_file" 2>/dev/null | tr -d '\n' || echo "0")
-    local failed_tasks=$(grep -c "Task Failed ❌" "$output_file" 2>/dev/null | tr -d '\n' || echo "0")
-    
-    # Ensure variables are clean numbers
-    total_tasks=$(echo "$total_tasks" | tr -d ' \n\r')
-    passed_tasks=$(echo "$passed_tasks" | tr -d ' \n\r')
-    failed_tasks=$(echo "$failed_tasks" | tr -d ' \n\r')
-    
-    # Set defaults if empty or non-numeric
-    total_tasks=${total_tasks:-0}
-    passed_tasks=${passed_tasks:-0}
-    failed_tasks=${failed_tasks:-0}
-    
-    # Validate they are actually numbers
-    if ! [[ "$total_tasks" =~ ^[0-9]+$ ]]; then total_tasks=0; fi
-    if ! [[ "$passed_tasks" =~ ^[0-9]+$ ]]; then passed_tasks=0; fi
-    if ! [[ "$failed_tasks" =~ ^[0-9]+$ ]]; then failed_tasks=0; fi
-    
-    if [ "$total_tasks" -gt 0 ]; then
-        echo "" >> "$summary_file"
-        echo "OVERALL SUMMARY:" >> "$summary_file"
-        echo "===============" >> "$summary_file"
-        echo "Total tasks run: $total_tasks" >> "$summary_file"
-        echo "Tasks passed: $passed_tasks" >> "$summary_file"
-        echo "Tasks failed: $failed_tasks" >> "$summary_file"
-        
-        # Calculate success rate safely
-        local success_rate=0
-        if [ "$total_tasks" -gt 0 ] && [ "$passed_tasks" -ge 0 ]; then
-            success_rate=$(echo "$passed_tasks $total_tasks" | awk '{if ($2 > 0) printf "%.0f", ($1 * 100) / $2; else print "0"}')
-        fi
-        echo "Success rate: ${success_rate}%" >> "$summary_file"
-    fi
-    
-    echo "" >> "$summary_file"
-    echo "Full output saved to: benchmark_output.log" >> "$summary_file"
-    
-    # Copy full output to the same subfolder
-    cp "$output_file" "$full_log_file"
-    
-    echo "✅ Results saved in subfolder: $run_subfolder"
-    echo "   📄 Summary: benchmark_summary.txt"
-    echo "   📋 Full log: benchmark_output.log"
-}
-
-# Activate conda environment
-echo "🔧 Activating android_world conda environment..."
-source /opt/anaconda3/etc/profile.d/conda.sh
-conda activate android_world
-
-# Check if emulator is already running (required for both fast and full modes)
-if check_emulator; then
-    echo "✅ Android emulator is already running"
-else
-    echo "📱 Starting Android emulator..."
-    
-    # Kill any existing emulator processes first
+check_emulator() { adb devices 2>/dev/null | grep -q "emulator"; }
+if [ "$start_emulator" = "true" ] && ! check_emulator; then
+    echo -e "${C_YELLOW}📱 Starting Android emulator...${C_NC}"
     pkill -f "emulator.*AndroidWorldAvd" || true
-    sleep 2
-    
-    # Start emulator in background
-    nohup ~/Library/Android/sdk/emulator/emulator -avd AndroidWorldAvd -no-snapshot -grpc 8554 > emulator.log 2>&1 &
-    EMULATOR_PID=$!
-    echo "   Emulator started with PID: $EMULATOR_PID"
-    
-    # Wait for emulator to be ready
-    if ! wait_for_emulator; then
-        echo "❌ Failed to start emulator. Check emulator.log for details."
+    # The emulator log path is now configurable via YAML.
+    nohup emulator -avd AndroidWorldAvd -no-snapshot -grpc 8554 > "${env_emulator_log_path:-emulator.log}" 2>&1 &
+
+    echo "⏳ Waiting for emulator to connect..."
+    if ! adb wait-for-device; then
+        echo -e "${C_RED}❌ ADB could not connect to the device.${C_NC}"
         exit 1
     fi
-fi
 
-# Verify adb connection
-echo "🔍 Checking ADB connection..."
-adb devices
-
-# Handle emulator setup (required for both fast and full modes)
-if ! handle_emulator_setup; then
-    # User chose to run setup
-    if ! run_emulator_setup; then
-        echo "❌ Cannot continue without successful emulator setup."
-        exit 1
-    fi
-fi
-
-# Create temporary output file
-TEMP_OUTPUT=$(mktemp)
-
-# Function to handle graceful shutdown
-cleanup() {
-    echo ""
-    echo "🛑 Interrupt received. Gracefully shutting down..."
-    echo "📊 Processing accumulated results..."
-    
-    # Kill the Python process if it's still running
-    if [ ! -z "$PYTHON_PID" ]; then
-        echo "⏹️  Stopping Python process (PID: $PYTHON_PID)..."
-        kill -TERM "$PYTHON_PID" 2>/dev/null || true
+    echo "⏳ Waiting for emulator to fully boot (max 3 minutes)..."
+    boot_completed=0
+    for ((i=0; i<90; i++)); do # Wait for up to 3 minutes (90 * 2s)
+        # Using `2>/dev/null` to suppress errors when shell is not ready
+        if [[ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" == "1" ]]; then
+            boot_completed=1
+            break
+        fi
         sleep 2
-        kill -KILL "$PYTHON_PID" 2>/dev/null || true
-    fi
-    
-    # Parse and save whatever results we have
-    if [ -f "$TEMP_OUTPUT" ] && [ -s "$TEMP_OUTPUT" ]; then
-        echo "💾 Saving partial results..."
-        parse_and_save_results "$TEMP_OUTPUT"
-    else
-        echo "⚠️  No results to save."
-    fi
-    
-    # Cleanup
-    rm -f "$TEMP_OUTPUT"
-    exit 130  # Standard exit code for Ctrl+C
-}
+    done
 
-# Set up signal handlers
-trap cleanup SIGINT SIGTERM
-
-# Run based on mode
-if [ "$MODE" = "fast" ]; then
-    echo "⚡ Running fast mode with M3A $(echo "$AGENT_TYPE" | tr '[:lower:]' '[:upper:]') Agent..."
-    if [ -n "$SPECIFIC_TASK" ]; then
-        echo "🎯 Task: $SPECIFIC_TASK"
-        python -u "$FAST_RUNNER" --task="$SPECIFIC_TASK" --verbose=True 2>&1 | \
-            grep --line-buffered -v "recvmsg encountered uncommon error: Message too long" | \
-            grep --line-buffered -v "tcp_posix.cc" | \
-            grep --line-buffered -v "E0000.*trace.cc.*Unknown tracer" | \
-            tee "$TEMP_OUTPUT" &
-        PYTHON_PID=$!
-        wait $PYTHON_PID
+    if [ "$boot_completed" -eq 1 ]; then
+        echo -e "${C_GREEN}✅ Emulator is booted and ready.${C_NC}"
+        sleep 5 # Grace period for all services to stabilize
     else
-        echo "🎲 Random task selection"
-        python -u "$FAST_RUNNER" --verbose=True 2>&1 | \
-            grep --line-buffered -v "recvmsg encountered uncommon error: Message too long" | \
-            grep --line-buffered -v "tcp_posix.cc" | \
-            grep --line-buffered -v "E0000.*trace.cc.*Unknown tracer" | \
-            tee "$TEMP_OUTPUT" &
-        PYTHON_PID=$!
-        wait $PYTHON_PID
+        echo -e "${C_RED}❌ Emulator failed to boot within the time limit.${C_NC}"
+        echo "Check ${env_emulator_log_path:-emulator.log} for details."
+        exit 1
+    fi
+fi
+
+# Handle emulator setup based on config
+SETUP_MARKER=".emulator_setup_completed"
+run_setup=false
+if [ "$perform_emulator_setup" = "force_run" ]; then
+    run_setup=true
+elif [ "$perform_emulator_setup" = "run_once" ] && [ ! -f "$SETUP_MARKER" ]; then
+    run_setup=true
+fi
+
+if [ "$run_setup" = "true" ]; then
+    echo -e "${C_YELLOW}🔧 Running AndroidWorld emulator setup (agent: $agent_registry_name)...${C_NC}"
+    if python run.py --perform_emulator_setup=True --agent_name="$agent_registry_name"; then
+        echo -e "${C_GREEN}✅ Emulator setup completed.${C_NC}" && touch "$SETUP_MARKER"
+    else
+        echo -e "${C_RED}❌ Emulator setup failed!${C_NC}"; exit 1
     fi
 else
-    echo "🎯 Running full benchmark with M3A $(echo "$AGENT_TYPE" | tr '[:lower:]' '[:upper:]') Agent..."
-    if [ -n "$SPECIFIC_TASK" ]; then
-        echo "🎯 Task: $SPECIFIC_TASK"
-        python -u run.py \
-            --suite_family=android_world \
-            --agent_name="$AGENT_NAME" \
-            --tasks="$SPECIFIC_TASK" \
-            --n_task_combinations=1 \
-            --verbose=True 2>&1 | \
-            grep --line-buffered -v "recvmsg encountered uncommon error: Message too long" | \
-            grep --line-buffered -v "tcp_posix.cc" | \
-            grep --line-buffered -v "E0000.*trace.cc.*Unknown tracer" | \
-            tee "$TEMP_OUTPUT" &
-        PYTHON_PID=$!
-        wait $PYTHON_PID
+    echo "⏭️  Skipping emulator setup."
+fi
+
+
+# --- Build Python Command ---
+build_python_command() {
+    local base_cmd
+    local common_flags="--agent_name=\"$agent_registry_name\""
+    
+    # Append all agent-specific flags, excluding registry_name
+    for var in $(compgen -v agent_); do
+        if [ "$var" != "agent_registry_name" ]; then
+            key_name=$(echo "$var" | sed 's/agent_//')
+            value=${!var}
+            [ -n "$value" ] && common_flags="$common_flags --$key_name=\"$value\""
+        fi
+    done
+
+    # Append all environment-specific flags, excluding variables used only by this script.
+    for var in $(compgen -v env_); do
+        key_name=$(echo "$var" | sed 's/env_//')
+        if [[ "$key_name" != "android_sdk_root" && "$key_name" != "emulator_log_path" ]]; then
+            value=${!var}
+            [ -n "$value" ] && common_flags="$common_flags --$key_name=\"$value\""
+        fi
+    done
+
+    if [ "$run_mode" = "fast" ]; then
+        base_cmd="python -u minimal_task_runner.py"
+        [ -n "$task_name" ] && common_flags="$common_flags --task=\"$task_name\""
+    elif [ "$run_mode" = "full" ]; then
+        base_cmd="python -u run.py"
+        [ -n "$task_name" ] && common_flags="$common_flags --tasks=\"$task_name\""
+        common_flags="$common_flags --suite_family=\"${task_suite_family:-android_world}\""
+        common_flags="$common_flags --n_task_combinations=${task_n_task_combinations:-1}"
     else
-        python -u run.py \
-            --suite_family=android_world \
-            --agent_name="$AGENT_NAME" \
-            --n_task_combinations=1 \
-            --verbose=True 2>&1 | \
-            grep --line-buffered -v "recvmsg encountered uncommon error: Message too long" | \
-            grep --line-buffered -v "tcp_posix.cc" | \
-            grep --line-buffered -v "E0000.*trace.cc.*Unknown tracer" | \
-            tee "$TEMP_OUTPUT" &
-        PYTHON_PID=$!
-        wait $PYTHON_PID
-            #Zum beispiel : Parameter = 3 => with 116 tasks × 3 combinations = 348 total task instances to run!
+        echo -e "${C_RED}❌ Invalid run mode: $run_mode.${C_NC}"; exit 1
     fi
-fi
+    echo "$base_cmd $common_flags"
+}
 
-# Parse and save results (only if we weren't interrupted)
-if [ -f "$TEMP_OUTPUT" ] && [ -s "$TEMP_OUTPUT" ]; then
-    parse_and_save_results "$TEMP_OUTPUT"
-fi
+PYTHON_CMD=$(build_python_command)
+echo -e "${C_CYAN}🐍 Executing command:${C_NC}"
+echo "$PYTHON_CMD"
+echo "-----------------------------------------------------"
 
-# Cleanup
-rm -f "$TEMP_OUTPUT"
 
-# Remove signal handlers
-trap - SIGINT SIGTERM
+# --- Execution & Cleanup ---
+# We use a subshell and a background process to manage the PID
+# for graceful shutdown on Ctrl+C.
+# The output is piped to `tee` to save to the log file and then filtered
+# with `grep` to hide raw LLM responses from the terminal.
+PID=
+trap '
+  echo -e "\n${C_RED}🛑 Interrupted. Killing process tree...${C_NC}"
+  # Kill the entire process group started by the script
+  [ ! -z "$PID" ] && kill -- -"$PID" 2>/dev/null
+  echo -e "${C_YELLOW}Logs saved to $LOG_FILE${C_NC}"
+  exit 130
+' SIGINT SIGTERM
 
-echo "🎉 Benchmark completed!"
-echo "📊 Results saved to: ./runs/" 
+# Using a subshell to run the command in its own process group
+(
+  set -m # Enable job control
+  eval "$PYTHON_CMD" &
+  PID=$!
+  wait $PID
+) 2>&1 | tee "$LOG_FILE" | grep -v "Raw LLM Response"
+
+echo -e "${C_GREEN}🎉 Benchmark completed! Full output log is at: $LOG_FILE${C_NC}"
+exit 0 

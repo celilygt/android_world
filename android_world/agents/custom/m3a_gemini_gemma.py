@@ -12,12 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""A Multimodal Autonomous Agent for Android (M3A) using OpenRouter free models."""
+"""A Multimodal Autonomous Agent for Android (M3A) using Gemini API with free Gemma 3-27B model."""
 
 import time
 from android_world.agents import agent_utils
 from android_world.agents import base_agent
-from android_world.agents import infer
+from android_world.agents.llm_wrappers import GeminiGemmaWrapper
 from android_world.agents import m3a_utils
 from android_world.env import interface
 from android_world.env import json_action
@@ -36,44 +36,44 @@ from android_world.agents.m3a import (
 )
 
 
-class M3AOpenRouter(base_agent.EnvironmentInteractingAgent):
-  """M3A using OpenRouter free models (like Gemma 3-27B) instead of paid APIs."""
+class M3AGeminiGemma(base_agent.EnvironmentInteractingAgent):
+  """M3A using Gemini API with free Gemma 3-27B model."""
 
   def __init__(
       self,
       env: interface.AsyncEnv,
-      model_name: str = "google/gemma-3-27b-it:free",
-      name: str = 'M3A-OpenRouter',
+      model_name: str = "gemma-3-27b-it",
+      name: str = 'M3A-Gemini-Gemma',
       wait_after_action_seconds: float = 2.0,
       max_retry: int = 3,
       temperature: float = 0.0,
-      site_url: str = None,
-      site_name: str = None,
+      top_p: float = 0.95,
+      enable_safety_checks: bool = True,
       verbose: bool = True,
   ):
-    """Initializes a M3A Agent using OpenRouter.
+    """Initializes a M3A Agent using Gemini API with Gemma model.
 
     Args:
       env: The environment.
-      model_name: The OpenRouter model to use (defaults to free Gemma 3-27B).
+      model_name: The Gemini model to use (defaults to free Gemma 3-27B).
       name: The agent name.
       wait_after_action_seconds: Seconds to wait for the screen to stabilize
         after executing an action.
       max_retry: Max number of retries when calling the LLM.
       temperature: Temperature for LLM generation.
-      site_url: Optional site URL for OpenRouter rankings.
-      site_name: Optional site name for OpenRouter rankings.
+      top_p: Top-p sampling parameter.
+      enable_safety_checks: Whether to enable Gemini safety checks.
       verbose: Whether to enable verbose output during agent execution.
     """
     super().__init__(env, name)
     
-    # Initialize the OpenRouter LLM wrapper
-    self.llm = infer.OpenRouterWrapper(
+    # Initialize the Gemini Gemma LLM wrapper
+    self.llm = GeminiGemmaWrapper(
         model_name=model_name,
         max_retry=max_retry,
         temperature=temperature,
-        site_url=site_url,
-        site_name=site_name,
+        top_p=top_p,
+        enable_safety_checks=enable_safety_checks,
     )
     
     self.history = []
@@ -156,9 +156,9 @@ class M3AOpenRouter(base_agent.EnvironmentInteractingAgent):
     if self.verbose:
       print(f"🔍 LLM Call Result: action_output={action_output is not None}, is_safe={is_safe}, raw_response={raw_response is not None}")
 
-    # Handle OpenRouter safety classification (usually always True)
+    # Handle Gemini safety classification
     if is_safe == False:  # pylint: disable=singleton-comparison
-      action_output = f"""Reason: Safety check triggered
+      action_output = f"""Reason: {m3a_utils.TRIGGER_SAFETY_CLASSIFIER}
 Action: {{"action_type": "status", "goal_status": "infeasible"}}"""
 
     if not raw_response:
@@ -197,20 +197,18 @@ Action: {{"action_type": "status", "goal_status": "infeasible"}}"""
       )
     
     if self.verbose:
-      # Handle requests.Response object properly
+      # Handle GenerateContentResponse object properly
       raw_text = ""
       if raw_response:
         try:
-          # For OpenRouter, raw_response is a requests.Response object
+          # Try to get the text content from the GenerateContentResponse
           if hasattr(raw_response, 'text'):
             raw_text = raw_response.text
-          elif hasattr(raw_response, 'json'):
-            # Try to get the response content from JSON
-            json_data = raw_response.json()
-            if 'choices' in json_data and json_data['choices']:
-              raw_text = json_data['choices'][0].get('message', {}).get('content', '')
-            else:
-              raw_text = str(json_data)
+          elif hasattr(raw_response, 'candidates') and raw_response.candidates:
+            # Extract text from candidates if available
+            candidate = raw_response.candidates[0]
+            if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
+              raw_text = ''.join([part.text for part in candidate.content.parts if hasattr(part, 'text')])
           else:
             raw_text = str(raw_response)
         except Exception:
@@ -341,7 +339,7 @@ Action: {{"action_type": "status", "goal_status": "infeasible"}}"""
         ],
     )
 
-    # OpenRouter free models don't have safety classification
+    # Handle Gemini safety classification
     if is_safe == False:  # pylint: disable=singleton-comparison
       summary = """Summary triggered LLM safety classifier."""
 
@@ -372,19 +370,19 @@ Action: {{"action_type": "status", "goal_status": "infeasible"}}"""
     )
 
 
-def create_m3a_openrouter_agent(
+def create_m3a_gemini_gemma_agent(
     env: interface.AsyncEnv,
-    model_name: str = "google/gemma-3-27b-it:free",
+    model_name: str = "gemma-3-27b-it",
     **kwargs
-) -> M3AOpenRouter:
-  """Convenience function to create an M3A agent using OpenRouter.
+) -> M3AGeminiGemma:
+  """Convenience function to create an M3A agent using Gemini API with Gemma.
   
   Args:
     env: The Android environment.
-    model_name: The OpenRouter model to use.
-    **kwargs: Additional arguments passed to M3AOpenRouter constructor.
+    model_name: The Gemini model to use.
+    **kwargs: Additional arguments passed to M3AGeminiGemma constructor.
     
   Returns:
-    Configured M3AOpenRouter agent.
+    Configured M3AGeminiGemma agent.
   """
-  return M3AOpenRouter(env=env, model_name=model_name, **kwargs) 
+  return M3AGeminiGemma(env=env, model_name=model_name, **kwargs) 

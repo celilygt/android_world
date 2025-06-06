@@ -37,6 +37,7 @@ from android_world import checkpointer as checkpointer_lib
 from android_world import episode_runner
 from android_world import registry
 from android_world import suite_utils
+from android_world.agents import registry as agent_registry
 from android_world.task_evals import task_eval
 from android_world.agents import base_agent
 from android_world.agents import human_agent
@@ -184,48 +185,26 @@ def _get_agent(
     env: interface.AsyncEnv,
     family: str | None = None,
 ) -> base_agent.EnvironmentInteractingAgent:
-  """Gets agent."""
-  print('Initializing agent...')
-  agent = None
-  if _AGENT_NAME.value == 'human_agent':
-    agent = human_agent.HumanAgent(env)
-  elif _AGENT_NAME.value == 'random_agent':
-    agent = random_agent.RandomAgent(env)
-  elif _AGENT_NAME.value == 'm3a_openrouter_agent':
-    from android_world.agents.m3a_openrouter import M3AOpenRouter
-    agent = M3AOpenRouter(env, verbose=True)
-  elif _AGENT_NAME.value == 'm3a_gemini_gemma_agent':
-    from android_world.agents.m3a_gemini_gemma import M3AGeminiGemma
-    agent = M3AGeminiGemma(env, verbose=True)
-  # Gemini.
-  elif _AGENT_NAME.value == 'm3a_gemini_gcp':
-    agent = m3a.M3A(
-        env, infer.GeminiGcpWrapper(model_name='gemini-1.5-pro-latest')
-    )
-  elif _AGENT_NAME.value == 't3a_gemini_gcp':
-    agent = t3a.T3A(
-        env, infer.GeminiGcpWrapper(model_name='gemini-1.5-pro-latest')
-    )
-  # GPT.
-  elif _AGENT_NAME.value == 't3a_gpt4':
-    agent = t3a.T3A(env, infer.Gpt4Wrapper('gpt-4-turbo-2024-04-09'))
-  elif _AGENT_NAME.value == 'm3a_gpt4v':
-    agent = m3a.M3A(env, infer.Gpt4Wrapper('gpt-4-turbo-2024-04-09'))
-  # SeeAct.
-  elif _AGENT_NAME.value == 'seeact':
-    agent = seeact.SeeAct(env)
+  """Gets agent from the registry."""
+  print(f'Initializing agent: {_AGENT_NAME.value}...')
 
-  if not agent:
-    raise ValueError(f'Unknown agent: {_AGENT_NAME.value}')
+  agent = agent_registry.get_agent(
+      name=_AGENT_NAME.value,
+      env=env,
+      verbose=_VERBOSE.value,
+  )
 
+  # Special handling for MiniWob tasks.
   if (
-      agent.name in ['M3A', 'T3A', 'SeeAct']
+      _AGENT_NAME.value
+      in ['m3a_gemini_gcp', 't3a_gemini_gcp', 't3a_gpt4', 'm3a_gpt4v', 'seeact']
       and family
       and family.startswith('miniwob')
       and hasattr(agent, 'set_task_guidelines')
   ):
     agent.set_task_guidelines(_MINIWOB_ADDITIONAL_GUIDELINES)
-  agent.name = _AGENT_NAME.value
+  
+  agent.name = _AGENT_NAME.value # Keep this for logging/output consistency.
 
   return agent
 

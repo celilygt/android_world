@@ -22,13 +22,22 @@ command-line flags.
 
 from collections.abc import Sequence
 import os
+import signal
+import sys
+from typing import Dict, Any
+
+# Force unbuffered output
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
 
 from absl import app
 from absl import flags
 from absl import logging
 from android_world import checkpointer as checkpointer_lib
+from android_world import episode_runner
 from android_world import registry
 from android_world import suite_utils
+from android_world.task_evals import task_eval
 from android_world.agents import base_agent
 from android_world.agents import human_agent
 from android_world.agents import infer
@@ -43,6 +52,9 @@ logging.set_verbosity(logging.WARNING)
 
 os.environ['GRPC_VERBOSITY'] = 'ERROR'  # Only show errors
 os.environ['GRPC_TRACE'] = 'none'  # Disable tracing
+# Additional gRPC error suppression
+os.environ['GRPC_ENABLE_FORK_SUPPORT'] = '0'
+os.environ['GRPC_POLL_STRATEGY'] = 'poll'
 
 
 def _find_adb_directory() -> str:
@@ -137,6 +149,12 @@ _FIXED_TASK_SEED = flags.DEFINE_boolean(
     ' (n_task_combinations > 1).',
 )
 
+_VERBOSE = flags.DEFINE_boolean(
+    'verbose',
+    True,
+    'Whether to show verbose output during task execution.',
+)
+
 
 # MiniWoB is very lightweight and new screens/View Hierarchy load quickly.
 _MINIWOB_TRANSITION_PAUSE = 0.2
@@ -148,6 +166,18 @@ _MINIWOB_ADDITIONAL_GUIDELINES = [
         ' DO NOT use the `navigate_home` action.'
     ),
 ]
+
+# Add global variables for graceful shutdown
+_interrupted = False
+_accumulated_results = []
+
+def _signal_handler(signum, frame):
+  """Handle interrupt signals gracefully."""
+  global _interrupted
+  print(f"\n\n🛑 Received interrupt signal ({signum}). Gracefully shutting down...")
+  print("📊 Saving accumulated results...")
+  _interrupted = True
+
 
 
 def _get_agent(
@@ -163,7 +193,10 @@ def _get_agent(
     agent = random_agent.RandomAgent(env)
   elif _AGENT_NAME.value == 'm3a_openrouter_agent':
     from android_world.agents.m3a_openrouter import M3AOpenRouter
-    agent = M3AOpenRouter(env)
+    agent = M3AOpenRouter(env, verbose=True)
+  elif _AGENT_NAME.value == 'm3a_gemini_gemma_agent':
+    from android_world.agents.m3a_gemini_gemma import M3AGeminiGemma
+    agent = M3AGeminiGemma(env, verbose=True)
   # Gemini.
   elif _AGENT_NAME.value == 'm3a_gemini_gcp':
     agent = m3a.M3A(
@@ -199,11 +232,27 @@ def _get_agent(
 
 def _main() -> None:
   """Runs eval suite and gets rewards back."""
+  global _accumulated_results
+  
+  # Immediate output to test buffering
+  print("🚀 Python process started - initializing...")
+  sys.stdout.flush()
+  
+  # Set up signal handlers for graceful shutdown
+  signal.signal(signal.SIGINT, _signal_handler)
+  signal.signal(signal.SIGTERM, _signal_handler)
+  
+  print("🔧 Loading environment...")
+  sys.stdout.flush()
+  
   env = env_launcher.load_and_setup_env(
       console_port=_DEVICE_CONSOLE_PORT.value,
       emulator_setup=_EMULATOR_SETUP.value,
       adb_path=_ADB_PATH.value,
   )
+  
+  print("✅ Environment loaded successfully")
+  sys.stdout.flush()
 
   n_task_combinations = _N_TASK_COMBINATIONS.value
   task_registry = registry.TaskRegistry()
@@ -216,7 +265,13 @@ def _main() -> None:
   )
   suite.suite_family = _SUITE_FAMILY.value
 
+  print("🤖 Initializing agent...")
+  sys.stdout.flush()
+  
   agent = _get_agent(env, _SUITE_FAMILY.value)
+  
+  print(f"✅ Agent initialized: {agent.name}")
+  sys.stdout.flush()
 
   if _SUITE_FAMILY.value.startswith('miniwob'):
     # MiniWoB pages change quickly, don't need to wait for screen to stabilize.
@@ -230,20 +285,125 @@ def _main() -> None:
     checkpoint_dir = checkpointer_lib.create_run_directory(_OUTPUT_PATH.value)
 
   print(
-      f'Starting eval with agent {_AGENT_NAME.value} and writing to'
+      f'🚀 Starting eval with agent {_AGENT_NAME.value} and writing to'
       f' {checkpoint_dir}'
   )
-  suite_utils.run(
-      suite,
-      agent,
-      checkpointer=checkpointer_lib.IncrementalCheckpointer(checkpoint_dir),
-      demo_mode=False,
-  )
-  print(
-      f'Finished running agent {_AGENT_NAME.value} on {_SUITE_FAMILY.value}'
-      f' family. Wrote to {checkpoint_dir}.'
-  )
-  env.close()
+  
+  try:
+    # Use custom process function that accumulates results
+    def accumulate_results(episodes: list[Dict[str, Any]], print_summary: bool = False):
+      global _accumulated_results
+      _accumulated_results = episodes.copy()
+      return suite_utils.process_episodes(episodes, print_summary)
+    
+    # Optionally add verbosity similar to minimal runner
+    if _VERBOSE.value:
+      original_run_task = suite_utils._run_task
+      
+      def verbose_run_task(task, run_episode_fn, env, demo_mode=False):
+        print(f"\n🎯 Starting task: {task.name}")
+        print(f"📋 Goal: {task.goal}")
+        print(f"📊 Task Complexity: {task.complexity}")
+        print(f"🎮 Max Steps: {int(task.complexity * 10)}")
+        print("=" * 80)
+        sys.stdout.flush()
+        
+        # Call original function but with enhanced episode runner
+        def enhanced_run_episode(task_arg):
+          print(f"\n🚀 Running episode for: {task_arg.name}")
+          
+          # Create custom print function for verbose output
+          def step_print(msg):
+            if 'Completed step' in msg:
+              step_num = msg.split('step')[1].split('.')[0].strip()
+              print(f"✅ Completed step {step_num}")
+            elif 'Agent indicates task is done' in msg:
+              print(f"🎉 Agent indicated task completion!")
+            elif 'Agent did not indicate task is done' in msg:
+              print(f"⏰ Agent reached max steps without completion")
+            elif 'Environment ends episode' in msg:
+              print(f"🔚 Environment ended episode")
+            else:
+              print(msg)
+            sys.stdout.flush()
+          
+          return episode_runner.run_episode(
+              goal=task_arg.goal,
+              agent=agent,
+              max_n_steps=suite_utils._allocate_step_budget(task_arg.complexity),
+              start_on_home_screen=task_arg.start_on_home_screen,
+              print_fn=step_print,
+          )
+        
+        result = original_run_task(task, enhanced_run_episode, env, demo_mode)
+        
+        # Add completion status similar to minimal runner
+        is_successful = result.get('is_successful', 0) > 0.5
+        episode_data = result.get('episode_data', {})
+        # Handle case where episode_data might be NaN (float) on error
+        if isinstance(episode_data, dict):
+          steps_taken = len(episode_data.get('step_number', []))
+        else:
+          steps_taken = 0
+        
+        print(f"\n📊 Task Results:")
+        print(f"   Task: {task.name}")  
+        print(f"   Steps taken: {steps_taken}")
+        print(f"   Task successful: {'Yes' if is_successful else 'No'}")
+        print(f"   Result: {'✅ Passed' if is_successful else '❌ Failed'}")
+        sys.stdout.flush()
+        
+        return result
+      
+      # Temporarily replace the function
+      suite_utils._run_task = verbose_run_task
+    
+    results = suite_utils.run(
+        suite,
+        agent,
+        checkpointer=checkpointer_lib.IncrementalCheckpointer(checkpoint_dir),
+        demo_mode=False,
+        process_episodes_fn=accumulate_results,
+    )
+    
+    # Restore original function if we patched it
+    if _VERBOSE.value:
+      suite_utils._run_task = original_run_task
+    
+    # If we get here without interruption, show final results
+    if not _interrupted:
+      print(f"\n🎉 Evaluation completed successfully!")
+      print(f"📊 Final Results Summary:")
+      
+      total_tasks = len(_accumulated_results)
+      successful_tasks = sum(1 for r in _accumulated_results if r.get('is_successful', 0) > 0.5)
+      success_rate = (successful_tasks / total_tasks * 100) if total_tasks > 0 else 0
+      
+      print(f"   Total tasks: {total_tasks}")
+      print(f"   Successful: {successful_tasks}")
+      print(f"   Success rate: {success_rate:.1f}%")
+      print(f"   Results saved to: {checkpoint_dir}")
+    
+  except KeyboardInterrupt:
+    print(f"\n⚠️  Keyboard interrupt received during execution")
+    _signal_handler(signal.SIGINT, None)
+  
+  finally:
+    # Always try to save results if we have any
+    if _accumulated_results:
+      print(f"💾 Saving {len(_accumulated_results)} accumulated results to checkpoint...")
+      try:
+        checkpointer = checkpointer_lib.IncrementalCheckpointer(checkpoint_dir)
+        # Note: The results should already be saved by suite_utils.run, but this is a backup
+        print(f"✅ Results preserved in: {checkpoint_dir}")
+      except Exception as e:
+        print(f"⚠️  Warning: Could not save final results: {e}")
+    
+    print(
+        f'🏁 Finished running agent {_AGENT_NAME.value} on {_SUITE_FAMILY.value}'
+        f' family. Results in {checkpoint_dir}.'
+    )
+    env.close()
 
 
 def main(argv: Sequence[str]) -> None:

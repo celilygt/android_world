@@ -244,6 +244,7 @@ def _run_task(
   try:
     task.initialize_task(env)
     _log_and_print('Running task %s with goal "%s"', task.name, task.goal)
+    _log_and_print('📋 Task Complexity: %.1f | Max Steps: %d', task.complexity, int(task.complexity * 10))
     interaction_results = run_episode(task)
     task_successful = task.is_successful(env)
   except Exception as e:  # pylint: disable=broad-exception-caught
@@ -259,11 +260,16 @@ def _run_task(
     )
   else:
     agent_successful = task_successful if interaction_results.done else 0.0
+    steps_taken = len(interaction_results.step_data[constants.STEP_NUMBER]) if interaction_results.step_data and constants.STEP_NUMBER in interaction_results.step_data else 0
     _log_and_print(
         '%s; %s',
         'Task Successful ✅' if agent_successful > 0.5 else 'Task Failed ❌',
         f' {task.goal}',
     )
+    _log_and_print('📊 Steps taken: %d | Agent indicated done: %s | Task success score: %.1f', 
+                   steps_taken, 
+                   'Yes' if interaction_results.done else 'No', 
+                   task_successful)
 
     if demo_mode:
       _display_success_overlay(env.controller, agent_successful)

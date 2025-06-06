@@ -207,6 +207,104 @@ class OpenRouterWrapper(LlmWrapper, MultimodalLlmWrapper):
     return ERROR_CALLING_LLM, None, None
 
 
+class GeminiGemmaWrapper(LlmWrapper, MultimodalLlmWrapper):
+  """Gemini API wrapper specifically for free Gemma 3-27B model.
+
+  Attributes:
+    gemini_api_key: The Gemini API key from environment variable.
+    max_retry: Max number of retries when some error happens.
+    temperature: The temperature parameter in LLM to control result stability.
+    model: Model to use (defaults to free Gemma 3-27B).
+    enable_safety_checks: Whether to enable safety checks.
+  """
+
+  RETRY_WAITING_SECONDS = 20
+
+  def __init__(
+      self,
+      model_name: str = "gemma-3-27b-it",
+      max_retry: int = 3,
+      temperature: float = 0.0,
+      top_p: float = 0.95,
+      enable_safety_checks: bool = True,
+  ):
+    if 'GEMINI_API_KEY' not in os.environ:
+      raise RuntimeError('Gemini API key not set. Please set GEMINI_API_KEY environment variable.')
+    genai.configure(api_key=os.environ['GEMINI_API_KEY'])
+    self.llm = genai.GenerativeModel(
+        model_name,
+        safety_settings=None
+        if enable_safety_checks
+        else SAFETY_SETTINGS_BLOCK_NONE,
+        generation_config=generation_types.GenerationConfig(
+            temperature=temperature, top_p=top_p, max_output_tokens=1000
+        ),
+    )
+    if max_retry <= 0:
+      max_retry = 3
+      print('Max_retry must be positive. Reset it to 3')
+    self.max_retry = min(max_retry, 5)
+    self.enable_safety_checks = enable_safety_checks
+
+  def predict(
+      self,
+      text_prompt: str,
+      enable_safety_checks: bool = None,
+      generation_config: generation_types.GenerationConfigType | None = None,
+  ) -> tuple[str, Optional[bool], Any]:
+    if enable_safety_checks is None:
+      enable_safety_checks = self.enable_safety_checks
+    return self.predict_mm(
+        text_prompt, [], enable_safety_checks, generation_config
+    )
+
+  def is_safe(self, raw_response):
+    try:
+      return (
+          raw_response.candidates[0].finish_reason
+          != answer_types.FinishReason.SAFETY
+      )
+    except Exception:  # pylint: disable=broad-exception-caught
+      #  Assume safe if the response is None or doesn't have candidates.
+      return True
+
+  def predict_mm(
+      self,
+      text_prompt: str,
+      images: list[np.ndarray],
+      enable_safety_checks: bool = None,
+      generation_config: generation_types.GenerationConfigType | None = None,
+  ) -> tuple[str, Optional[bool], Any]:
+    if enable_safety_checks is None:
+      enable_safety_checks = self.enable_safety_checks
+      
+    counter = self.max_retry
+    retry_delay = 1.0
+    output = None
+    while counter > 0:
+      try:
+        output = self.llm.generate_content(
+            [text_prompt] + [Image.fromarray(image) for image in images],
+            safety_settings=None
+            if enable_safety_checks
+            else SAFETY_SETTINGS_BLOCK_NONE,
+            generation_config=generation_config,
+        )
+        return output.text, True, output
+      except Exception as e:  # pylint: disable=broad-exception-caught
+        counter -= 1
+        print(f'Error calling Gemini LLM, will retry in {retry_delay} seconds')
+        print(e)
+        if counter > 0:
+          # Expo backoff
+          time.sleep(retry_delay)
+          retry_delay *= 2
+
+    if (output is not None) and (not self.is_safe(output)):
+      return ERROR_CALLING_LLM, False, output
+    return ERROR_CALLING_LLM, None, None
+
+
 class GeminiGcpWrapper(LlmWrapper, MultimodalLlmWrapper):
   """Gemini GCP interface."""
 

@@ -13,10 +13,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Runs a single task with M3A OpenRouter Agent.
+"""Runs a single task with M3A Gemini Gemma Agent.
 
-This script uses the M3A agent with OpenRouter's free models (like Gemma 3-27B)
-instead of paid APIs. Requires OPENROUTER_API_KEY environment variable.
+This script uses the M3A agent with Google's Gemini API and the free Gemma 3-27B model
+instead of paid APIs. Requires GEMINI_API_KEY environment variable.
 """
 
 from collections.abc import Sequence
@@ -29,7 +29,7 @@ from absl import app
 from absl import flags
 from absl import logging
 from android_world import registry
-from android_world.agents.m3a_openrouter import M3AOpenRouter
+from android_world.agents.m3a_gemini_gemma import M3AGeminiGemma
 from android_world.env import env_launcher
 from android_world.task_evals import task_eval
 
@@ -87,16 +87,21 @@ _TASK = flags.DEFINE_string(
 
 _MODEL_NAME = flags.DEFINE_string(
     'model_name',
-    'google/gemma-3-27b-it:free',
-    'OpenRouter model to use. Available free models: '
-    'google/gemma-3-27b-it:free, meta-llama/llama-3.3-70b-instruct:free, '
-    'mistralai/mistral-7b-instruct:free',
+    'gemma-3-27b-it',
+    'Gemini model to use. Free Gemma models: '
+    'gemma-3-27b-it (default), gemma-3-9b-it',
 )
 
 _TEMPERATURE = flags.DEFINE_float(
     'temperature',
     0.0,
     'Temperature for LLM generation. 0.0 = deterministic, 1.0 = more random.',
+)
+
+_TOP_P = flags.DEFINE_float(
+    'top_p',
+    0.95,
+    'Top-p sampling parameter for LLM generation.',
 )
 
 _MAX_RETRY = flags.DEFINE_integer(
@@ -111,6 +116,12 @@ _WAIT_AFTER_ACTION = flags.DEFINE_float(
     'Seconds to wait after each action for the screen to stabilize.',
 )
 
+_ENABLE_SAFETY_CHECKS = flags.DEFINE_boolean(
+    'enable_safety_checks',
+    True,
+    'Whether to enable Gemini safety checks.',
+)
+
 _VERBOSE = flags.DEFINE_boolean(
     'verbose',
     True,
@@ -118,31 +129,30 @@ _VERBOSE = flags.DEFINE_boolean(
 )
 
 
-def _check_openrouter_key() -> None:
-  """Check if OpenRouter API key is set."""
-  if 'OPENROUTER_API_KEY' not in os.environ:
-    print("❌ OPENROUTER_API_KEY environment variable not set!")
+def _check_gemini_key() -> None:
+  """Check if Gemini API key is set."""
+  if 'GEMINI_API_KEY' not in os.environ:
+    print("❌ GEMINI_API_KEY environment variable not set!")
     print("\n📋 Setup Instructions:")
-    print("1. Sign up at https://openrouter.ai (free)")
-    print("2. Get your API key from the dashboard")
-    print("3. Set the environment variable:")
-    print("   export OPENROUTER_API_KEY='your_api_key_here'")
-    print("\n💡 Available free models:")
-    print("   - google/gemma-3-27b-it:free (default)")
-    print("   - meta-llama/llama-3.3-70b-instruct:free")
-    print("   - mistralai/mistral-7b-instruct:free")
+    print("1. Get a free Gemini API key from https://aistudio.google.com/")
+    print("2. Set the environment variable:")
+    print("   export GEMINI_API_KEY='your_api_key_here'")
+    print("\n💡 Available free Gemma models:")
+    print("   - gemma-3-27b-it (default)")
+    print("   - gemma-3-9b-it")
+    print("\n🆓 Note: Gemma models on Gemini API have free usage quotas")
     sys.exit(1)
   else:
-    print("✅ OpenRouter API key found!")
+    print("✅ Gemini API key found!")
 
 
 def _main() -> None:
-  """Runs a single task with M3A OpenRouter Agent."""
+  """Runs a single task with M3A Gemini Gemma Agent."""
   
-  # Check OpenRouter API key
-  _check_openrouter_key()
+  # Check Gemini API key
+  _check_gemini_key()
   
-  print(f"🤖 Using M3A OpenRouter Agent with model: {_MODEL_NAME.value}")
+  print(f"🤖 Using M3A Gemini Gemma Agent with model: {_MODEL_NAME.value}")
   
   env = env_launcher.load_and_setup_env(
       console_port=_DEVICE_CONSOLE_PORT.value,
@@ -167,14 +177,16 @@ def _main() -> None:
   task = task_type(params)
   task.initialize_task(env)
   
-  # Create M3A OpenRouter agent with specified configuration
-  agent = M3AOpenRouter(
+  # Create M3A Gemini Gemma agent with specified configuration
+  agent = M3AGeminiGemma(
       env=env,
       model_name=_MODEL_NAME.value,
-      name='M3A-OpenRouter',
+      name='M3A-Gemini-Gemma',
       temperature=_TEMPERATURE.value,
+      top_p=_TOP_P.value,
       max_retry=_MAX_RETRY.value,
       wait_after_action_seconds=_WAIT_AFTER_ACTION.value,
+      enable_safety_checks=_ENABLE_SAFETY_CHECKS.value,
       verbose=_VERBOSE.value,
   )
 
@@ -182,7 +194,7 @@ def _main() -> None:
   print(f"🎯 Max steps allowed: {int(task.complexity * 10)}")
   print(f"📋 Current Task: {task_type.__name__}")
   print(f"🤖 Model: {_MODEL_NAME.value}")
-  print(f"🎮 Agent: M3A OpenRouter")
+  print(f"🎮 Agent: M3A Gemini Gemma")
   print("=" * 80)
   
   is_done = False

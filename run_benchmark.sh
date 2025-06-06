@@ -1,14 +1,15 @@
 #!/bin/bash
 
 # AndroidWorld Benchmark Runner Script
-# This script sets up the environment and runs the benchmark with M3A OpenRouter Agent
-# Usage: ./run_benchmark.sh [fast|full] [task_name]
+# This script sets up the environment and runs the benchmark with M3A agents
+# Usage: ./run_benchmark.sh [fast|full] [task_name] [--agent=AGENT_TYPE]
 
 set -e  # Exit on any error
 
 # Parse command line arguments
 MODE="full"  # default
 SPECIFIC_TASK=""
+AGENT_TYPE="gemini"  # default
 
 # Help function
 show_help() {
@@ -16,19 +17,23 @@ show_help() {
 AndroidWorld Benchmark Runner
 =============================
 
-Usage: ./run_benchmark.sh [MODE] [TASK_NAME]
-       ./run_benchmark.sh [TASK_NAME]
+Usage: ./run_benchmark.sh [MODE] [TASK_NAME] [--agent=AGENT_TYPE]
+       ./run_benchmark.sh [TASK_NAME] [--agent=AGENT_TYPE]
        ./run_benchmark.sh --help
 
 MODES:
-  fast    Run m3a_openrouter_minimal_runner.py (quick test)
-  full    Run full benchmark with M3A OpenRouter Agent (default)
+  fast    Run minimal runner (quick test)
+  full    Run full benchmark (default)
+
+AGENT TYPES:
+  openrouter    Use M3A OpenRouter Agent with free models (default)
+  gemini        Use M3A Gemini Agent with free Gemma 3-27B
 
 EXAMPLES:
-  ./run_benchmark.sh                           # Full benchmark with M3A OpenRouter
-  ./run_benchmark.sh full                      # Full benchmark with M3A OpenRouter  
-  ./run_benchmark.sh fast                      # Fast mode with M3A OpenRouter
-  ./run_benchmark.sh fast ContactsAddContact   # Fast mode with specific task
+  ./run_benchmark.sh                                    # Full benchmark with OpenRouter
+  ./run_benchmark.sh --agent=gemini                     # Full benchmark with Gemini  
+  ./run_benchmark.sh fast --agent=openrouter            # Fast mode with OpenRouter
+  ./run_benchmark.sh fast ContactsAddContact --agent=gemini  # Fast mode with specific task and Gemini
 
 AVAILABLE TASKS:
   ContactsAddContact, ClockStopWatchRunning, and many more...
@@ -42,48 +47,86 @@ OUTPUT:
 EOF
 }
 
-if [ $# -gt 0 ]; then
+# Parse arguments
+while [ $# -gt 0 ]; do
     case $1 in
         --help|-h|help)
             show_help
             exit 0
             ;;
+        --agent=*)
+            AGENT_TYPE="${1#*=}"
+            ;;
         fast|full)
             MODE=$1
-            if [ $# -gt 1 ]; then
-                SPECIFIC_TASK=$2
-            fi
             ;;
         *)
-            # First argument is a task name, use full mode
-            SPECIFIC_TASK=$1
+            # Assume it's a task name if not recognized as other option
+            if [ -z "$SPECIFIC_TASK" ]; then
+                SPECIFIC_TASK=$1
+            fi
             ;;
     esac
-fi
+    shift
+done
 
 echo "🚀 Starting AndroidWorld Benchmark Setup..."
 echo "📋 Mode: $MODE"
+echo "🤖 Agent: $AGENT_TYPE"
 if [ -n "$SPECIFIC_TASK" ]; then
     echo "🎯 Specific Task: $SPECIFIC_TASK"
 fi
 
-# Check if OpenRouter API key is set
-if [ -z "$OPENROUTER_API_KEY" ]; then
-    echo "❌ OPENROUTER_API_KEY environment variable not set!"
-    echo ""
-    echo "📋 Setup Instructions:"
-    echo "1. Sign up at https://openrouter.ai (free)"
-    echo "2. Get your API key from the dashboard"
-    echo "3. Set the environment variable:"
-    echo "   export OPENROUTER_API_KEY='your_api_key_here'"
-    echo ""
-    echo "💡 Available free models:"
-    echo "   - google/gemma-3-27b-it:free (default)"
-    echo "   - meta-llama/llama-3.3-70b-instruct:free"
-    echo "   - mistralai/mistral-7b-instruct:free"
-    exit 1
+# Check API keys based on agent type
+if [ "$AGENT_TYPE" = "openrouter" ]; then
+    if [ -z "$OPENROUTER_API_KEY" ]; then
+        echo "❌ OPENROUTER_API_KEY environment variable not set!"
+        echo ""
+        echo "📋 Setup Instructions:"
+        echo "1. Sign up at https://openrouter.ai (free)"
+        echo "2. Get your API key from the dashboard"
+        echo "3. Set the environment variable:"
+        echo "   export OPENROUTER_API_KEY='your_api_key_here'"
+        echo ""
+        echo "💡 Available free models:"
+        echo "   - google/gemma-3-27b-it:free (default)"
+        echo "   - meta-llama/llama-3.3-70b-instruct:free"
+        echo "   - mistralai/mistral-7b-instruct:free"
+        exit 1
+    else
+        echo "✅ OpenRouter API key found!"
+    fi
+elif [ "$AGENT_TYPE" = "gemini" ]; then
+    if [ -z "$GEMINI_API_KEY" ]; then
+        echo "❌ GEMINI_API_KEY environment variable not set!"
+        echo ""
+        echo "📋 Setup Instructions:"
+        echo "1. Get a free Gemini API key from https://aistudio.google.com/"
+        echo "2. Set the environment variable:"
+        echo "   export GEMINI_API_KEY='your_api_key_here'"
+        echo ""
+        echo "💡 Available free Gemma models:"
+        echo "   - gemma-3-27b-it (default)"
+        echo "   - gemma-3-9b-it"
+        echo ""
+        echo "🆓 Note: Gemma models on Gemini API have free usage quotas"
+        exit 1
+    else
+        echo "✅ Gemini API key found!"
+    fi
 else
-    echo "✅ OpenRouter API key found!"
+    echo "❌ Unknown agent type: $AGENT_TYPE"
+    echo "Available agent types: openrouter, gemini"
+    exit 1
+fi
+
+# Set runner script and agent name based on agent type
+if [ "$AGENT_TYPE" = "openrouter" ]; then
+    FAST_RUNNER="m3a_openrouter_minimal_runner.py"
+    AGENT_NAME="m3a_openrouter_agent"
+elif [ "$AGENT_TYPE" = "gemini" ]; then
+    FAST_RUNNER="m3a_gemini_gemma_minimal_runner.py"
+    AGENT_NAME="m3a_gemini_gemma_agent"
 fi
 
 # Add Android SDK tools to PATH
@@ -208,8 +251,8 @@ run_emulator_setup() {
     echo "🔧 Running AndroidWorld emulator setup..."
     echo "   This may take several minutes as it installs required apps..."
     
-    # Use OpenRouter agent for emulator setup too
-    if python run.py --perform_emulator_setup=True --agent_name=m3a_openrouter_agent; then
+    # Use the selected agent for emulator setup too
+    if python run.py --perform_emulator_setup=True --agent_name="$AGENT_NAME"; then
         echo "✅ Emulator setup completed successfully!"
         touch ".emulator_setup_completed"
         return 0
@@ -239,7 +282,7 @@ AndroidWorld Benchmark Summary
 ==============================
 Timestamp: $(date)
 Mode: $MODE
-Agent: M3A OpenRouter (google/gemma-3-27b-it:free)
+Agent: M3A $(echo "$AGENT_TYPE" | tr '[:lower:]' '[:upper:]')
 $([ -n "$SPECIFIC_TASK" ] && echo "Specific Task: $SPECIFIC_TASK" || echo "Tasks: All available tasks")
 
 TASK RESULTS:
@@ -392,27 +435,27 @@ TEMP_OUTPUT=$(mktemp)
 
 # Run based on mode
 if [ "$MODE" = "fast" ]; then
-    echo "⚡ Running fast mode with M3A OpenRouter Agent..."
+    echo "⚡ Running fast mode with M3A $(echo "$AGENT_TYPE" | tr '[:lower:]' '[:upper:]') Agent..."
     if [ -n "$SPECIFIC_TASK" ]; then
         echo "🎯 Task: $SPECIFIC_TASK"
-        python m3a_openrouter_minimal_runner.py --task="$SPECIFIC_TASK" 2>&1 | tee "$TEMP_OUTPUT"
+        python "$FAST_RUNNER" --task="$SPECIFIC_TASK" 2>&1 | tee "$TEMP_OUTPUT"
     else
         echo "🎲 Random task selection"
-        python m3a_openrouter_minimal_runner.py 2>&1 | tee "$TEMP_OUTPUT"
+        python "$FAST_RUNNER" 2>&1 | tee "$TEMP_OUTPUT"
     fi
 else
-    echo "🎯 Running full benchmark with M3A OpenRouter Agent..."
+    echo "🎯 Running full benchmark with M3A $(echo "$AGENT_TYPE" | tr '[:lower:]' '[:upper:]') Agent..."
     if [ -n "$SPECIFIC_TASK" ]; then
         echo "🎯 Task: $SPECIFIC_TASK"
         python run.py \
             --suite_family=android_world \
-            --agent_name=m3a_openrouter_agent \
+            --agent_name="$AGENT_NAME" \
             --tasks="$SPECIFIC_TASK" \
             --n_task_combinations=1 2>&1 | tee "$TEMP_OUTPUT"
     else
         python run.py \
             --suite_family=android_world \
-            --agent_name=m3a_openrouter_agent \
+            --agent_name="$AGENT_NAME" \
             --n_task_combinations=1 2>&1 | tee "$TEMP_OUTPUT"
             #Zum beispiel : Parameter = 3 => with 116 tasks × 3 combinations = 348 total task instances to run!
     fi

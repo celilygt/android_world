@@ -1,6 +1,7 @@
 absl-py==2.1.0
 android_env==1.2.3
 dm_env==1.6
+easyocr
 fuzzywuzzy==0.18.0
 google-generativeai
 grpcio-tools
@@ -9,6 +10,7 @@ IPython
 jsonschema==4.17.3
 matplotlib==3.6.1
 numpy==1.26.3
+ollama
 opencv-python
 pandas==2.1.4
 pydub

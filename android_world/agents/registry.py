@@ -75,10 +75,14 @@ def _register_all_agents():
     """Imports and registers all custom agents."""
     from android_world.agents.custom import m3a_openrouter
     from android_world.agents.custom import m3a_gemini_gemma
+    from android_world.agents.custom import v_droid_agent
+    from android_world.agents.custom import v_droid_ollama_agent
 
     # Register your custom agents here
     register('m3a_openrouter_agent', m3a_openrouter.M3AOpenRouter)
     register('m3a_gemini_gemma_agent', m3a_gemini_gemma.M3AGeminiGemma)
+    register('v_droid_agent', v_droid_agent.VDroidAgent)
+    register('v_droid_ollama_agent', v_droid_ollama_agent.VDroidOllamaAgent)
 
 # Perform registration automatically when the module is imported.
 _register_all_agents() 

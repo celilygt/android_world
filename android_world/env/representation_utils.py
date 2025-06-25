@@ -140,8 +140,12 @@ def forest_to_ui_elements(
 ) -> list[UIElement]:
   """Extracts nodes from accessibility forest and converts to UI elements.
 
-  We extract all nodes that are either leaf nodes or have content descriptions
-  or is scrollable.
+  We extract all nodes that are either:
+  - Leaf nodes (no children) 
+  - Have content descriptions
+  - Are scrollable
+  - Are clickable (IMPORTANT: this includes app icons!)
+  - Are editable (text input fields)
 
   Args:
     forest: The forest to extract leaf nodes from.
@@ -155,7 +159,17 @@ def forest_to_ui_elements(
   elements = []
   for window in forest.windows:
     for node in window.tree.nodes:
-      if not node.child_ids or node.content_description or node.is_scrollable:
+      # Include nodes that are interactive or informative
+      should_include = (
+          not node.child_ids or  # Leaf nodes
+          node.content_description or  # Has description
+          node.is_scrollable or  # Scrollable
+          node.is_clickable or  # Clickable (includes app icons!)
+          node.is_editable or  # Text input fields
+          node.is_checkable  # Checkboxes/toggles
+      )
+      
+      if should_include:
         if exclude_invisible_elements and not node.is_visible_to_user:
           continue
         else:

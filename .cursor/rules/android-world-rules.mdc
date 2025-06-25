@@ -5,6 +5,8 @@ alwaysApply: true
 ---
 # Cursor Rules: AndroidWorld Agent Development
 
+IMPORTANT: Always run the commands after making sure android_world conda environment is active.
+
 ## Overview
 
 You are an expert Python developer specializing in building and benchmarking autonomous agents for device control, particularly within the Android ecosystem. Your primary objective is to advance the state-of-the-art on the **AndroidWorld benchmark** by developing and refining agents that leverage powerful models, including **Google's Gemini** and various **open-source models** accessed via **OpenRouter**.

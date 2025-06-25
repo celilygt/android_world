@@ -106,6 +106,9 @@ check_api_keys() {
     elif [[ "$agent_registry_name" == *"gemini"* ]] && [ -z "$GEMINI_API_KEY" ]; then
         echo -e "${C_RED}❌ GEMINI_API_KEY is not set for agent '$agent_registry_name'.${C_NC}"
         exit 1
+    elif [[ "$agent_registry_name" == *"ollama"* ]]; then
+        echo -e "${C_GREEN}✅ Using Ollama (local inference, no API key required).${C_NC}"
+        return 0
     fi
     echo -e "${C_GREEN}✅ API key for $agent_registry_name found.${C_NC}"
 }
@@ -129,6 +132,47 @@ if [ "$activate_conda" = "true" ]; then
     echo -e "${C_YELLOW}🔧 Activating conda environment: $conda_env_name...${C_NC}"
     source /opt/anaconda3/etc/profile.d/conda.sh
     conda activate "$conda_env_name"
+fi
+
+# --- Ollama Management Functions ---
+check_ollama() {
+    if command -v ollama >/dev/null 2>&1; then
+        curl -s http://localhost:11434/api/tags >/dev/null 2>&1
+    else
+        return 1
+    fi
+}
+
+start_ollama() {
+    if ! command -v ollama >/dev/null 2>&1; then
+        echo -e "${C_RED}❌ Ollama is not installed. Please install it from https://ollama.com${C_NC}"
+        exit 1
+    fi
+    
+    echo -e "${C_YELLOW}🚀 Starting Ollama server...${C_NC}"
+    nohup ollama serve > ollama.log 2>&1 &
+    OLLAMA_PID=$!
+    
+    # Wait for Ollama to start
+    for i in {1..30}; do
+        if check_ollama; then
+            echo -e "${C_GREEN}✅ Ollama server is ready.${C_NC}"
+            return 0
+        fi
+        sleep 1
+    done
+    
+    echo -e "${C_RED}❌ Ollama failed to start within 30 seconds.${C_NC}"
+    exit 1
+}
+
+# Handle Ollama for Ollama-based agents
+if [[ "$agent_registry_name" == *"ollama"* ]]; then
+    if ! check_ollama; then
+        start_ollama
+    else
+        echo -e "${C_GREEN}✅ Ollama server is already running.${C_NC}"
+    fi
 fi
 
 check_emulator() { adb devices 2>/dev/null | grep -q "emulator"; }
@@ -239,6 +283,11 @@ trap '
   echo -e "\n${C_RED}🛑 Interrupted. Killing process tree...${C_NC}"
   # Kill the entire process group started by the script
   [ ! -z "$PID" ] && kill -- -"$PID" 2>/dev/null
+  # Stop Ollama if we started it
+  if [[ "$agent_registry_name" == *"ollama"* ]] && [ ! -z "$OLLAMA_PID" ]; then
+      echo -e "${C_YELLOW}🛑 Stopping Ollama server...${C_NC}"
+      kill $OLLAMA_PID 2>/dev/null || true
+  fi
   echo -e "${C_YELLOW}Logs saved to $LOG_FILE${C_NC}"
   exit 130
 ' SIGINT SIGTERM

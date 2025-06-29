@@ -44,22 +44,25 @@ Candidate action: {candidate_action}
 
 Is this action helpful for the task? Answer only "Yes" or "No".
 
-For creating contacts, look for:
-- "Add" or "+" buttons to create new contacts  
-- Contact app icons
-- Text fields for name/phone
-- Save/Done buttons
+For creating contacts:
+- "Open Contacts app" = Yes (essential first step)
+- "Add" or "+" buttons = Yes
+- Contact app icons = Yes  
+- Text fields for name/phone = Yes
+- Save/Done buttons = Yes
+- Navigate home/back = Maybe (depends on context)
+- Random clicks on debugging text = No
 
 Answer: """
 
 
 class VDroidAgent(base_agent.EnvironmentInteractingAgent):
-    """V-DROID Agent using verifier-based action selection."""
+    """V-DROID Agent using Gemini for verifier-based action selection."""
 
     def __init__(
         self,
         env: interface.AsyncEnv,
-        model_name: str = "gemma-3-27b-it",
+        model_name: str = "auto",
         name: str = 'V-DROID-Agent',
         wait_after_action_seconds: float = 2.0,
         max_retry: int = 3,
@@ -68,11 +71,11 @@ class VDroidAgent(base_agent.EnvironmentInteractingAgent):
         enable_safety_checks: bool = True,
         verbose: bool = True,
     ):
-        """Initializes a V-DROID Agent using Gemini API with Gemma model as verifier.
+        """Initializes a V-DROID Agent using Gemini API with smart router as verifier.
 
         Args:
             env: The environment.
-            model_name: The Gemini model to use as verifier.
+            model_name: The Gemini model to use as verifier. Use "auto" for smart routing (default).
             name: The agent name.
             wait_after_action_seconds: Seconds to wait for the screen to stabilize
                 after executing an action.
@@ -84,13 +87,19 @@ class VDroidAgent(base_agent.EnvironmentInteractingAgent):
         """
         super().__init__(env, name)
         
-        # Initialize the Gemini Gemma LLM wrapper as our verifier
+        # Always use smart router for optimal model selection, ignoring specific model requests
+        router_model_name = "auto"
+        if model_name != "auto" and verbose:
+            print(f"🔄 V-DROID Agent: Ignoring specific model '{model_name}' and using smart router instead")
+        
+        # Initialize the Gemini Gemma LLM wrapper with smart routing
         self.llm = GeminiGemmaWrapper(
-            model_name=model_name,
+            model_name=router_model_name,
             max_retry=max_retry,
             temperature=temperature,
             top_p=top_p,
             enable_safety_checks=enable_safety_checks,
+            verbose=verbose,
         )
         
         self.history = []
@@ -116,7 +125,7 @@ class VDroidAgent(base_agent.EnvironmentInteractingAgent):
         ui_elements: list[representation_utils.UIElement], 
         candidates: list[dict]
     ) -> list[tuple[float, dict]]:
-        """Score candidate actions using the verifier LLM.
+        """Score candidate actions using the Gemini verifier LLM.
         
         Args:
             goal: The task goal.
@@ -135,7 +144,7 @@ class VDroidAgent(base_agent.EnvironmentInteractingAgent):
         # Prioritize candidates to reduce API calls
         prioritized_candidates = self._prioritize_candidates(candidates, goal)
         
-        # Limit to top 10 candidates to avoid rate limiting
+        # Limit to top 10 candidates to avoid rate limiting with Gemini API
         candidates_to_score = prioritized_candidates[:10]
         
         for candidate in candidates_to_score:
@@ -152,7 +161,7 @@ class VDroidAgent(base_agent.EnvironmentInteractingAgent):
             if self.verbose:
                 print(f"🔍 Verifying candidate: {action_description}")
             
-            # Call verifier LLM
+            # Call Gemini verifier
             try:
                 response, is_safe, raw_response = self.llm.predict(verification_prompt)
                 
@@ -166,12 +175,12 @@ class VDroidAgent(base_agent.EnvironmentInteractingAgent):
                     print(f"   Score: {score} (Response: {response.strip() if response else 'None'})")
                     
             except Exception as e:
-                print(f"Error calling verifier LLM: {e}")
+                print(f"Error calling Gemini verifier: {e}")
                 score = 0.0
             
             scored_candidates.append((score, candidate))
         
-        # Add unscored candidates with score 0.0
+        # Add unscored candidates with score 0.0 (due to rate limiting)
         for candidate in candidates[len(candidates_to_score):]:
             scored_candidates.append((0.0, candidate))
         
@@ -266,15 +275,25 @@ class VDroidAgent(base_agent.EnvironmentInteractingAgent):
         action_type = candidate.get('action_type', 'unknown')
         
         if action_type == 'click':
-            return f"Click on element at index {candidate.get('index', 'unknown')}"
+            # Show the actual text content for visual clicks
+            if 'index' in candidate:
+                text = candidate.get('text', 'no text')
+                return f"Click UI element '{text}'"
+            else:
+                # Visual click - show the detected text
+                text = candidate.get('text', 'unknown location')
+                coords = f"({candidate.get('x', '?')}, {candidate.get('y', '?')})"
+                return f"Click on '{text}' at {coords}"
         elif action_type == 'input_text':
             text = candidate.get('text', '')
-            return f"Input text '{text}' into element at index {candidate.get('index', 'unknown')}"
+            target = candidate.get('index', 'text field')
+            return f"Input '{text}' into {target}"
         elif action_type == 'scroll':
             direction = candidate.get('direction', 'unknown')
-            return f"Scroll {direction} on element at index {candidate.get('index', 'unknown')}"
+            return f"Scroll {direction}"
         elif action_type == 'long_press':
-            return f"Long press on element at index {candidate.get('index', 'unknown')}"
+            text = candidate.get('text', 'element')
+            return f"Long press on '{text}'"
         elif action_type == 'navigate_home':
             return "Navigate to home screen"
         elif action_type == 'navigate_back':
@@ -284,16 +303,19 @@ class VDroidAgent(base_agent.EnvironmentInteractingAgent):
             return f"Mark task as {status}"
         elif action_type == 'wait':
             return "Wait for screen to update"
+        elif action_type == 'open_app':
+            app_name = candidate.get('app_name', 'app')
+            return f"Open {app_name} app"
         else:
             return f"Perform {action_type} action"
 
     def step(self, goal: str) -> base_agent.AgentInteractionResult:
-        """Perform a step using the V-DROID verifier-based approach.
+        """Perform a step using the V-DROID verifier-based approach with Gemini.
         
         The V-DROID approach:
         1. Get current state
         2. Generate candidate actions
-        3. Score candidates with verifier
+        3. Score candidates with Gemini verifier
         4. Execute highest-scoring action
         5. Update history
         
@@ -312,13 +334,25 @@ class VDroidAgent(base_agent.EnvironmentInteractingAgent):
             'execution_success': False,
         }
         
-        print(f'----------V-DROID Step {step_data["step_number"]}')
+        print(f'----------V-DROID Gemini Step {step_data["step_number"]}')
         
         # Get current state
         state = self.get_post_transition_state()
         
-        # Generate candidate actions using the proper V-DROID candidate generation
-        candidates = candidate_generation.generate_candidate_actions(state)
+        # Check if we need to open the Contacts app first
+        if step_data["step_number"] == 1 and 'contact' in goal.lower():
+            # For contact tasks, prioritize opening the Contacts app
+            contacts_candidates = [
+                {'action_type': 'open_app', 'app_name': 'Contacts'},
+                {'action_type': 'open_app', 'app_name': 'com.google.android.contacts'},
+            ]
+            # Generate other candidates as fallback
+            other_candidates = candidate_generation.generate_candidate_actions(state, goal)
+            candidates = contacts_candidates + other_candidates
+        else:
+            # Generate candidate actions using the proper V-DROID candidate generation
+            candidates = candidate_generation.generate_candidate_actions(state, goal)
+        
         step_data['candidates'] = candidates
         
         if self.verbose:
@@ -332,7 +366,7 @@ class VDroidAgent(base_agent.EnvironmentInteractingAgent):
             self.history.append(f"Step {step_data['step_number']}: No valid candidates found")
             return base_agent.AgentInteractionResult(True, step_data)
         
-        # Score candidates using verifier
+        # Score candidates using Gemini verifier
         scored_candidates = self._score_candidate_actions(
             goal, 
             self.history, 
@@ -387,7 +421,7 @@ class VDroidAgent(base_agent.EnvironmentInteractingAgent):
 
 def create_v_droid_agent(
     env: interface.AsyncEnv,
-    model_name: str = "gemma-3-27b-it",
+    model_name: str = "auto",
     **kwargs
 ) -> VDroidAgent:
     """Convenience function to create a V-DROID agent.

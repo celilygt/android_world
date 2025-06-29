@@ -26,7 +26,7 @@ script:
 # =============================================================================
 run:
   # "fast" for a single test run, "full" for the complete benchmark suite.
-  mode: "fast"
+  mode: "full"
   verbose: true
 
 
@@ -35,7 +35,7 @@ run:
 # =============================================================================
 agent:
   # Specifies which agent configuration to use from the `configurations` block below.
-  active_agent: "v_droid_ollama"
+  active_agent: "v_droid"
 
   # --- Agent-Specific Settings ---
   # Each agent has its own configuration block. The script will only use the
@@ -89,8 +89,8 @@ agent:
       # This name must match the agent's name in the registry.
       registry_name: "v_droid_agent"
       
-      # The specific Gemma model to use via the Gemini API.
-      model_name: "gemma-3-27b-it"
+      # Use "auto" for smart Gemini model routing (automatically selects best available model)
+      model_name: "auto"
 
       # LLM generation temperature.
       temperature: 0.0

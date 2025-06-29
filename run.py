@@ -143,6 +143,30 @@ _OUTPUT_PATH = flags.DEFINE_string(
 # Agent specific.
 _AGENT_NAME = flags.DEFINE_string('agent_name', 'm3a_gpt4v', help='Agent name.')
 
+_ENABLE_SAFETY_CHECKS = flags.DEFINE_boolean(
+    'enable_safety_checks', True, 'Enable Gemini safety checks.'
+)
+
+_MODEL_NAME = flags.DEFINE_string(
+    'model_name', None, 'Model name for the agent (e.g., gemma-3-27b-it).'
+)
+
+_TEMPERATURE = flags.DEFINE_float(
+    'temperature', 0.0, 'LLM generation temperature.'
+)
+
+_TOP_P = flags.DEFINE_float(
+    'top_p', 0.95, 'Top-p sampling parameter.'
+)
+
+_MAX_RETRY = flags.DEFINE_integer(
+    'max_retry', 3, 'Max number of retries for LLM calls.'
+)
+
+_WAIT_AFTER_ACTION_SECONDS = flags.DEFINE_float(
+    'wait_after_action_seconds', 2.0, 'Seconds to wait for UI to stabilize after an action.'
+)
+
 _FIXED_TASK_SEED = flags.DEFINE_boolean(
     'fixed_task_seed',
     False,
@@ -188,10 +212,28 @@ def _get_agent(
   """Gets agent from the registry."""
   print(f'Initializing agent: {_AGENT_NAME.value}...')
 
+  # Build kwargs dict, filtering out None values
+  agent_kwargs = {
+      'verbose': _VERBOSE.value,
+      'enable_safety_checks': _ENABLE_SAFETY_CHECKS.value,
+  }
+  
+  # Add optional parameters if they are provided
+  if _MODEL_NAME.value is not None:
+    agent_kwargs['model_name'] = _MODEL_NAME.value
+  if _TEMPERATURE.value is not None:
+    agent_kwargs['temperature'] = _TEMPERATURE.value
+  if _TOP_P.value is not None:
+    agent_kwargs['top_p'] = _TOP_P.value
+  if _MAX_RETRY.value is not None:
+    agent_kwargs['max_retry'] = _MAX_RETRY.value
+  if _WAIT_AFTER_ACTION_SECONDS.value is not None:
+    agent_kwargs['wait_after_action_seconds'] = _WAIT_AFTER_ACTION_SECONDS.value
+
   agent = agent_registry.get_agent(
       name=_AGENT_NAME.value,
       env=env,
-      verbose=_VERBOSE.value,
+      **agent_kwargs
   )
 
   # Special handling for MiniWob tasks.

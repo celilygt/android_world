@@ -26,3 +26,5 @@ poetry.lock
 
 runs/
 *_pb2.py
+
+*.xml

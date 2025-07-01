@@ -151,6 +151,10 @@ _MODEL_NAME = flags.DEFINE_string(
     'model_name', None, 'Model name for the agent (e.g., gemma-3-27b-it).'
 )
 
+_MAESTRO_VERIFIER_MODEL_NAME = flags.DEFINE_string(
+    'maestro_verifier_model_name', None, 'Model name for Maestro and Verifier LLMs.'
+)
+
 _TEMPERATURE = flags.DEFINE_float(
     'temperature', 0.0, 'LLM generation temperature.'
 )
@@ -180,6 +184,30 @@ _VERBOSE = flags.DEFINE_boolean(
     'Whether to show verbose output during task execution.',
 )
 
+# Celil Agent specific flags
+_TRANSITION_PAUSE = flags.DEFINE_float(
+    'transition_pause', 1.0, 'Transition pause for celil_agent.'
+)
+
+_UI_TARS_MODEL_NAME = flags.DEFINE_string(
+    'ui_tars_model_name', 'avil/UI-TARS:latest', 'UI-TARS model name for celil_agent.'
+)
+
+_UI_TARS_TEMPERATURE = flags.DEFINE_float(
+    'ui_tars_temperature', 0.0, 'UI-TARS temperature for celil_agent.'
+)
+
+_UI_TARS_MAX_NEW_TOKENS = flags.DEFINE_integer(
+    'ui_tars_max_new_tokens', 256, 'UI-TARS max new tokens for celil_agent.'
+)
+
+_HIGH_CREDITS = flags.DEFINE_boolean(
+    'high_credits', True, 'Whether user has 10+ credits on OpenRouter (affects daily limits).'
+)
+
+_MAX_TOKENS = flags.DEFINE_integer(
+    'max_tokens', 2048, 'Maximum tokens for LLM responses.'
+)
 
 # MiniWoB is very lightweight and new screens/View Hierarchy load quickly.
 _MINIWOB_TRANSITION_PAUSE = 0.2
@@ -221,6 +249,8 @@ def _get_agent(
   # Add optional parameters if they are provided
   if _MODEL_NAME.value is not None:
     agent_kwargs['model_name'] = _MODEL_NAME.value
+  if _MAESTRO_VERIFIER_MODEL_NAME.value is not None:
+    agent_kwargs['maestro_verifier_model_name'] = _MAESTRO_VERIFIER_MODEL_NAME.value
   if _TEMPERATURE.value is not None:
     agent_kwargs['temperature'] = _TEMPERATURE.value
   if _TOP_P.value is not None:
@@ -229,6 +259,20 @@ def _get_agent(
     agent_kwargs['max_retry'] = _MAX_RETRY.value
   if _WAIT_AFTER_ACTION_SECONDS.value is not None:
     agent_kwargs['wait_after_action_seconds'] = _WAIT_AFTER_ACTION_SECONDS.value
+  
+  # Celil Agent specific parameters
+  if _TRANSITION_PAUSE.value is not None:
+    agent_kwargs['transition_pause'] = _TRANSITION_PAUSE.value
+  if _UI_TARS_MODEL_NAME.value is not None:
+    agent_kwargs['ui_tars_model_name'] = _UI_TARS_MODEL_NAME.value
+  if _UI_TARS_TEMPERATURE.value is not None:
+    agent_kwargs['ui_tars_temperature'] = _UI_TARS_TEMPERATURE.value
+  if _UI_TARS_MAX_NEW_TOKENS.value is not None:
+    agent_kwargs['ui_tars_max_new_tokens'] = _UI_TARS_MAX_NEW_TOKENS.value
+  if _HIGH_CREDITS.value is not None:
+    agent_kwargs['high_credits'] = _HIGH_CREDITS.value
+  if _MAX_TOKENS.value is not None:
+    agent_kwargs['max_tokens'] = _MAX_TOKENS.value
 
   agent = agent_registry.get_agent(
       name=_AGENT_NAME.value,

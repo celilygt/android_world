@@ -22,9 +22,11 @@ numpy==1.26.3
 ollama
 opencv-python
 pandas==2.1.4
+Pillow
 pydub
 python-Levenshtein
 pytest
+pytesseract
 requests
 tenacity
 termcolor

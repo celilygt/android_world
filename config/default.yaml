@@ -35,13 +35,30 @@ run:
 # =============================================================================
 agent:
   # Specifies which agent configuration to use from the `configurations` block below.
-  active_agent: "v_droid"
+  active_agent: "celil_agent"
 
   # --- Agent-Specific Settings ---
   # Each agent has its own configuration block. The script will only use the
   # settings for the `active_agent` specified above.
   configurations:
     
+    celil_agent:
+      registry_name: "celil_agent"
+      
+      # FREE Qwen2.5 VL model via OpenRouter (excellent for UI understanding!)
+      model_name: "qwen/qwen2.5-vl-72b-instruct:free"
+      temperature: 0.0
+      max_tokens: 2048
+      high_credits: true  # User has 10+ credits = 1000 daily requests instead of 50
+      
+      # UI-TARS Configuration for Action Generation
+      ui_tars_model_name: "avil/UI-TARS:latest"
+      ui_tars_temperature: 0.0
+      ui_tars_max_new_tokens: 256
+      
+      # Agent timing
+      transition_pause: 1.0
+
     # Configuration for the M3A OpenRouter agent
     m3a_openrouter:
       # This name must match the agent's name in the registry.

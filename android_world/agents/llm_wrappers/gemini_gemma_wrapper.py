@@ -29,6 +29,20 @@ from PIL import Image
 
 from android_world.agents.llm_wrappers import base_wrapper
 
+# Add detailed logging setup
+import logging
+
+# Configure detailed LLM logging
+llm_logger = logging.getLogger('gemini_llm_calls')
+llm_logger.setLevel(logging.INFO)
+
+# Create handler if it doesn't exist
+if not llm_logger.handlers:
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter('🤖 GEMINI [%(asctime)s] %(message)s', datefmt='%H:%M:%S')
+    handler.setFormatter(formatter)
+    llm_logger.addHandler(handler)
+    llm_logger.propagate = False  # Prevent duplicate logs
 
 SAFETY_SETTINGS_BLOCK_NONE = {
     types.HarmCategory.HARM_CATEGORY_HARASSMENT: types.HarmBlockThreshold.BLOCK_NONE,
@@ -39,7 +53,7 @@ SAFETY_SETTINGS_BLOCK_NONE = {
 
 # Model configurations with rate limits (RPM = Requests Per Minute, TPM = Tokens Per Minute, RPD = Requests Per Day)
 GEMINI_MODEL_CONFIGS = {
-    "gemini-2.5-flash-lite-preview-0617": {
+    "gemini-2.5-flash-lite-preview-06-17": {
         "rpm_limit": 15,
         "tpm_limit": 250000,
         "rpd_limit": 1000,
@@ -73,6 +87,21 @@ GEMINI_MODEL_CONFIGS = {
         "rpd_limit": 100,
         "priority": 5,
         "description": "Pro model with lower limits"
+    },
+    # Gemma models for high-volume verification tasks
+    "gemma-3n-e4b-it": {
+        "rpm_limit": 30,
+        "tpm_limit": 15000,
+        "rpd_limit": 14400,
+        "priority": 10,  # Lower priority for verifiers
+        "description": "High-volume Gemma model for verification"
+    },
+    "gemma-3-4b-it": {
+        "rpm_limit": 30,
+        "tpm_limit": 15000,
+        "rpd_limit": 14400,
+        "priority": 11,
+        "description": "High-volume Gemma model for verification"
     },
 }
 
@@ -384,6 +413,25 @@ class GeminiGemmaWrapper(
         
         results = []
         
+        # Log batch details
+        llm_logger.info(f"📋 BATCH START: {len(contents)} requests to {selected_model}")
+        for i, content in enumerate(contents):
+            # Extract text content for logging
+            text_content = ""
+            image_count = 0
+            for item in content:
+                if isinstance(item, str):
+                    text_content = item
+                elif hasattr(item, 'format'):  # PIL Image
+                    image_count += 1
+            
+            # Truncate long prompts for logging
+            truncated_prompt = text_content[:200] + "..." if len(text_content) > 200 else text_content
+            llm_logger.info(f"📤 Request {i+1}/{len(contents)} to {selected_model}:")
+            llm_logger.info(f"   📝 Prompt ({len(text_content)} chars, ~{estimated_tokens_list[i]} tokens): {truncated_prompt}")
+            if image_count > 0:
+                llm_logger.info(f"   🖼️ Images: {image_count}")
+        
         # Process each content individually but efficiently
         for i, content in enumerate(contents):
             counter = self.max_retry
@@ -392,6 +440,10 @@ class GeminiGemmaWrapper(
             while counter > 0:
                 try:
                     llm = self._create_model(selected_model)
+                    
+                    # Log the actual API call
+                    start_time = time.time()
+                    llm_logger.info(f"🚀 Calling {selected_model} API (request {i+1}/{len(contents)})...")
                     
                     # Single content generation
                     output = llm.generate_content(
@@ -402,36 +454,54 @@ class GeminiGemmaWrapper(
                         stream=False,
                     )
                     
+                    call_duration = time.time() - start_time
+                    
                     if self.is_safe(output):
+                        # Log successful response
+                        response_text = output.text[:100] + "..." if len(output.text) > 100 else output.text
+                        llm_logger.info(f"✅ SUCCESS (request {i+1}, {call_duration:.1f}s): {response_text}")
+                        llm_logger.info(f"   📊 Recorded {estimated_tokens_list[i]} tokens for {selected_model}")
+                        
                         self.usage_tracker.record_usage(selected_model, estimated_tokens_list[i])
                         results.append((output.text, True, output))
                     else:
+                        llm_logger.warning(f"⚠️ UNSAFE RESPONSE (request {i+1}): Content filtered by safety settings")
                         results.append((base_wrapper.ERROR_CALLING_LLM, False, output))
                     
                     # Add optional extra delay if specified (router already handles smart delays)
                     if delay_ms > 0 and i < len(contents) - 1:  # Don't delay after the last request
+                        llm_logger.info(f"⏳ Extra delay: {delay_ms}ms")
                         time.sleep(delay_ms / 1000.0)  # Convert ms to seconds
                     
                     break  # Success, move to next content
                         
                 except Exception as e:
+                    call_duration = time.time() - start_time
                     error_msg = str(e).lower()
                     
+                    llm_logger.error(f"❌ ERROR (request {i+1}, attempt {self.max_retry - counter + 1}, {call_duration:.1f}s): {e}")
+                    
                     if "quota" in error_msg or "rate" in error_msg or "limit" in error_msg:
+                        llm_logger.warning(f"🚫 Rate limit detected for {selected_model}")
                         if not self.fixed_model:
-                            print(f"Rate limit hit on {selected_model}, trying different model...")
+                            llm_logger.info(f"🔄 Trying to switch models...")
                             self.usage_tracker.record_usage(selected_model, 999999)
-                            selected_model = self.router.select_best_model(contents[0][0], max_wait_seconds=0)
+                            new_model = self.router.select_best_model(contents[0][0], max_wait_seconds=0)
+                            if new_model != selected_model:
+                                selected_model = new_model
+                                llm_logger.info(f"🔀 Switched to {selected_model}")
                             continue
                     
                     counter -= 1
                     if counter > 0:
-                        print(f"Error calling Gemini LLM ({selected_model}): {e}. Retrying in {retry_delay}s...")
+                        llm_logger.warning(f"🔁 Retrying in {retry_delay}s... ({counter} attempts left)")
                         time.sleep(retry_delay)
                         retry_delay *= 2
                     else:
+                        llm_logger.error(f"💥 Max retries exceeded for request {i+1}")
                         results.append((base_wrapper.ERROR_CALLING_LLM, None, None))
         
+        llm_logger.info(f"📋 BATCH COMPLETE: Processed {len(contents)} requests using {selected_model}")
         if self.verbose:
             print(f"✅ Processed {len(contents)} requests using {selected_model}")
         
@@ -444,6 +514,8 @@ class GeminiGemmaWrapper(
     ) -> tuple[str, Optional[bool], Any]:
         estimated_tokens = self.router.estimate_tokens(text_prompt)
         content = [text_prompt] + [Image.fromarray(image) for image in images]
+        
+        llm_logger.info(f"🎯 SINGLE REQUEST: predict_mm called")
         
         # Call the batch helper with a single item
         results = self._generate_content_batch([content], [estimated_tokens])
@@ -485,15 +557,19 @@ class GeminiGemmaWrapper(
         if not candidate_descriptions:
             return []
         
+        llm_logger.info(f"🔍 BATCH VERIFICATION: {len(candidate_descriptions)} candidates")
+        llm_logger.info(f"   📝 Shared context ({len(shared_context)} chars): {shared_context[:150]}...")
+        
         # Create batch prompts with shared prefix
         batch_contents = []
         estimated_tokens_list = []
         
-        for candidate_desc in candidate_descriptions:
+        for i, candidate_desc in enumerate(candidate_descriptions):
             full_prompt = f"{shared_context}\n\nCandidate action: {candidate_desc}\n\nIs this action helpful for the task? Answer only \"Yes\" or \"No\".\n\nAnswer:"
             content = [full_prompt]
             batch_contents.append(content)
             estimated_tokens_list.append(self.router.estimate_tokens(full_prompt))
+            llm_logger.info(f"   🎯 Candidate {i+1}: {candidate_desc}")
         
         if self.verbose:
             total_candidates = len(candidate_descriptions)

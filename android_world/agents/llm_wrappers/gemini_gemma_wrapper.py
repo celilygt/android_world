@@ -363,78 +363,91 @@ class GeminiGemmaWrapper(
             # Assume safe if response is malformed or lacks safety attributes.
             return True
 
-    def predict_mm(
+    def _generate_content_batch(
         self,
-        text_prompt: str,
-        images: list[np.ndarray],
-    ) -> tuple[str, Optional[bool], Any]:
+        contents: list[list[Any]],
+        estimated_tokens_list: list[int],
+        delay_ms: int = 100,
+    ) -> list[tuple[str, Optional[bool], Any]]:
+        """Helper to generate content for multiple prompts with rate limiting."""
         
-        # Select the best model for this request
+        # Select the best model for this request (using the first prompt for routing)
         if self.fixed_model:
             selected_model = self.fixed_model
             if self.verbose:
                 print(f"Using fixed model: {selected_model}")
         else:
-            selected_model = self.router.select_best_model(text_prompt, max_wait_seconds=60)
+            selected_model = self.router.select_best_model(contents[0][0], max_wait_seconds=60)
             if not selected_model or selected_model not in GEMINI_MODEL_CONFIGS:
                 print(f"Warning: Invalid model selection, using fallback")
                 selected_model = "gemini-2.5-flash"
         
-        # Estimate tokens for usage tracking
+        results = []
+        
+        # Process each content individually but efficiently
+        for i, content in enumerate(contents):
+            counter = self.max_retry
+            retry_delay = self.RETRY_WAITING_SECONDS
+            
+            while counter > 0:
+                try:
+                    llm = self._create_model(selected_model)
+                    
+                    # Single content generation
+                    output = llm.generate_content(
+                        content,
+                        safety_settings=(
+                            None if self.enable_safety_checks else SAFETY_SETTINGS_BLOCK_NONE
+                        ),
+                        stream=False,
+                    )
+                    
+                    if self.is_safe(output):
+                        self.usage_tracker.record_usage(selected_model, estimated_tokens_list[i])
+                        results.append((output.text, True, output))
+                    else:
+                        results.append((base_wrapper.ERROR_CALLING_LLM, False, output))
+                    
+                    # Add optional extra delay if specified (router already handles smart delays)
+                    if delay_ms > 0 and i < len(contents) - 1:  # Don't delay after the last request
+                        time.sleep(delay_ms / 1000.0)  # Convert ms to seconds
+                    
+                    break  # Success, move to next content
+                        
+                except Exception as e:
+                    error_msg = str(e).lower()
+                    
+                    if "quota" in error_msg or "rate" in error_msg or "limit" in error_msg:
+                        if not self.fixed_model:
+                            print(f"Rate limit hit on {selected_model}, trying different model...")
+                            self.usage_tracker.record_usage(selected_model, 999999)
+                            selected_model = self.router.select_best_model(contents[0][0], max_wait_seconds=0)
+                            continue
+                    
+                    counter -= 1
+                    if counter > 0:
+                        print(f"Error calling Gemini LLM ({selected_model}): {e}. Retrying in {retry_delay}s...")
+                        time.sleep(retry_delay)
+                        retry_delay *= 2
+                    else:
+                        results.append((base_wrapper.ERROR_CALLING_LLM, None, None))
+        
+        if self.verbose:
+            print(f"✅ Processed {len(contents)} requests using {selected_model}")
+        
+        return results
+
+    def predict_mm(
+        self,
+        text_prompt: str,
+        images: list[np.ndarray],
+    ) -> tuple[str, Optional[bool], Any]:
         estimated_tokens = self.router.estimate_tokens(text_prompt)
-        
-        counter = self.max_retry
-        retry_delay = self.RETRY_WAITING_SECONDS
-        
-        # Prepare content for the API call
         content = [text_prompt] + [Image.fromarray(image) for image in images]
         
-        while counter > 0:
-            try:
-                # Create model instance for the selected model
-                llm = self._create_model(selected_model)
-                
-                start_time = time.time()
-                output = llm.generate_content(
-                    content,
-                    safety_settings=(
-                        None if self.enable_safety_checks else SAFETY_SETTINGS_BLOCK_NONE
-                    ),
-                )
-                
-                if self.is_safe(output):
-                    # Record successful usage
-                    self.usage_tracker.record_usage(selected_model, estimated_tokens)
-                    
-                    if self.verbose:
-                        elapsed = time.time() - start_time
-                        print(f"✅ Request completed in {elapsed:.2f}s using {selected_model}")
-                        print(f"📊 Response length: {len(output.text)} chars")
-                    
-                    return output.text, True, output
-                else:
-                    return base_wrapper.ERROR_CALLING_LLM, False, output
-                    
-            except Exception as e:
-                error_msg = str(e).lower()
-                
-                # Handle rate limiting specifically
-                if "quota" in error_msg or "rate" in error_msg or "limit" in error_msg:
-                    if not self.fixed_model:
-                        # Try a different model if using auto-routing
-                        print(f"Rate limit hit on {selected_model}, trying different model...")
-                        # Remove this model from consideration temporarily by marking high usage
-                        self.usage_tracker.record_usage(selected_model, 999999)  # Fake high usage
-                        selected_model = self.router.select_best_model(text_prompt, max_wait_seconds=0)
-                        continue
-                
-                counter -= 1
-                print(f"Error calling Gemini LLM ({selected_model}): {e}. Retrying in {retry_delay}s...")
-                if counter > 0:
-                    time.sleep(retry_delay)
-                    retry_delay *= 2
-
-        return base_wrapper.ERROR_CALLING_LLM, None, None
+        # Call the batch helper with a single item
+        results = self._generate_content_batch([content], [estimated_tokens])
+        return results[0]
     
     def get_usage_summary(self) -> str:
         """Get current usage summary."""
@@ -446,4 +459,46 @@ class GeminiGemmaWrapper(
             self.usage_tracker.storage_file.unlink()
         self.usage_tracker = GeminiUsageTracker()
         self.router = GeminiModelRouter(self.usage_tracker)
-        print("Usage tracking reset.") 
+        print("Usage tracking reset.")
+
+    def predict_batch_verification(
+        self,
+        shared_context: str,
+        candidate_descriptions: list[str],
+        delay_ms: int = 100,
+    ) -> list[tuple[str, Optional[bool], Any]]:
+        """Batch verification of multiple candidates with shared context prefix.
+        
+        This method optimizes rate limits by:
+        1. Using a shared context prefix across all candidates
+        2. Leveraging the router's smart delay and model selection logic
+        3. Minimizing token usage through prefix caching
+        
+        Args:
+            shared_context: The shared context (goal, history, UI elements)
+            candidate_descriptions: List of candidate action descriptions to evaluate
+            delay_ms: Optional additional delay in ms (0 = rely on router's smart delays)
+            
+        Returns:
+            List of (response, is_safe, raw_response) tuples, one per candidate
+        """
+        if not candidate_descriptions:
+            return []
+        
+        # Create batch prompts with shared prefix
+        batch_contents = []
+        estimated_tokens_list = []
+        
+        for candidate_desc in candidate_descriptions:
+            full_prompt = f"{shared_context}\n\nCandidate action: {candidate_desc}\n\nIs this action helpful for the task? Answer only \"Yes\" or \"No\".\n\nAnswer:"
+            content = [full_prompt]
+            batch_contents.append(content)
+            estimated_tokens_list.append(self.router.estimate_tokens(full_prompt))
+        
+        if self.verbose:
+            total_candidates = len(candidate_descriptions)
+            avg_tokens = sum(estimated_tokens_list) // total_candidates if total_candidates > 0 else 0
+            print(f"🔄 Batch verification: {total_candidates} candidates, ~{avg_tokens} tokens each")
+        
+        # Use existing batch processing infrastructure with configurable delay
+        return self._generate_content_batch(batch_contents, estimated_tokens_list, delay_ms) 

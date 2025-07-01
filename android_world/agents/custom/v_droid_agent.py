@@ -23,37 +23,20 @@ multi-step process:
 """
 
 import time
+import json
 from typing import Any, Optional
 
 from android_world.agents import agent_utils
 from android_world.agents import base_agent
 from android_world.agents.llm_wrappers.gemini_gemma_wrapper import GeminiGemmaWrapper
 from android_world.agents.custom import candidate_generation
+from android_world.agents.custom import screen_analyzer
 from android_world.env import interface
 from android_world.env import json_action
 from android_world.env import representation_utils
 
 
-# Enhanced verification prompt template for scoring candidate actions
-VERIFICATION_PROMPT_TEMPLATE = """You are controlling an Android device to complete this task: {goal}
 
-Current screen has these elements:
-{ui_elements}
-
-Candidate action: {candidate_action}
-
-Is this action helpful for the task? Answer only "Yes" or "No".
-
-For creating contacts:
-- "Open Contacts app" = Yes (essential first step)
-- "Add" or "+" buttons = Yes
-- Contact app icons = Yes  
-- Text fields for name/phone = Yes
-- Save/Done buttons = Yes
-- Navigate home/back = Maybe (depends on context)
-- Random clicks on debugging text = No
-
-Answer: """
 
 
 class VDroidAgent(base_agent.EnvironmentInteractingAgent):
@@ -70,6 +53,9 @@ class VDroidAgent(base_agent.EnvironmentInteractingAgent):
         top_p: float = 0.95,
         enable_safety_checks: bool = True,
         verbose: bool = True,
+        enable_batch_verification: bool = True,
+        batch_size: int = 0,
+        batch_delay_ms: int = 0,
     ):
         """Initializes a V-DROID Agent using Gemini API with smart router as verifier.
 
@@ -84,6 +70,9 @@ class VDroidAgent(base_agent.EnvironmentInteractingAgent):
             top_p: Top-p sampling parameter.
             enable_safety_checks: Whether to enable Gemini safety checks.
             verbose: Whether to enable verbose output during agent execution.
+            enable_batch_verification: Whether to use batch processing for candidate verification.
+            batch_size: Maximum candidates to process in one batch (0 = no limit, recommended).
+            batch_delay_ms: Optional additional delay in ms (0 = rely on router's smart delays).
         """
         super().__init__(env, name)
         
@@ -106,6 +95,11 @@ class VDroidAgent(base_agent.EnvironmentInteractingAgent):
         self.additional_guidelines = None
         self.wait_after_action_seconds = wait_after_action_seconds
         self.verbose = verbose
+        
+        # Batch processing settings
+        self.enable_batch_verification = enable_batch_verification
+        self.batch_size = batch_size
+        self.batch_delay_ms = batch_delay_ms
 
     def set_task_guidelines(self, task_guidelines: list[str]) -> None:
         """Set additional task-specific guidelines."""
@@ -119,110 +113,95 @@ class VDroidAgent(base_agent.EnvironmentInteractingAgent):
         self.history = []
 
     def _score_candidate_actions(
-        self, 
-        goal: str, 
-        history: list[str], 
-        ui_elements: list[representation_utils.UIElement], 
-        candidates: list[dict]
+        self,
+        goal: str,
+        history: list[str],
+        ui_elements: list[representation_utils.UIElement],
+        candidates: list[dict],
+        screen_contexts: list[str]
     ) -> list[tuple[float, dict]]:
-        """Score candidate actions using the Gemini verifier LLM.
-        
+        """Scores candidate actions using a single batch prompt to the Gemini LLM.
+
+        This method constructs a single prompt containing all candidate actions and asks
+        the LLM to return a JSON object with a score for each candidate. This
+        approach is designed to be efficient and avoid rate-limiting issues.
+
         Args:
             goal: The task goal.
             history: List of previous action descriptions.
-            ui_elements: List of UIElement objects from current state.
+            ui_elements: List of UIElement objects from the current state.
             candidates: List of candidate action dictionaries.
-            
-        Returns:
-            List of (score, candidate_action) tuples.
-        """
-        scored_candidates = []
-        
-        # Generate detailed UI description for the prompt
-        ui_description = self._generate_ui_elements_description(ui_elements)
-        
-        # Prioritize candidates to reduce API calls
-        prioritized_candidates = self._prioritize_candidates(candidates, goal)
-        
-        # Limit to top 10 candidates to avoid rate limiting with Gemini API
-        candidates_to_score = prioritized_candidates[:10]
-        
-        for candidate in candidates_to_score:
-            # Format the candidate action for verification
-            action_description = self._format_candidate_action(candidate)
-            
-            # Create verification prompt
-            verification_prompt = VERIFICATION_PROMPT_TEMPLATE.format(
-                goal=goal,
-                ui_elements=ui_description,
-                candidate_action=action_description
-            )
-            
-            if self.verbose:
-                print(f"🔍 Verifying candidate: {action_description}")
-            
-            # Call Gemini verifier
-            try:
-                response, is_safe, raw_response = self.llm.predict(verification_prompt)
-                
-                if not is_safe or not response:
-                    score = 0.0
-                else:
-                    # Parse response - "Yes" = 1, anything else = 0
-                    score = 1.0 if "yes" in response.lower().strip() else 0.0
-                    
-                if self.verbose:
-                    print(f"   Score: {score} (Response: {response.strip() if response else 'None'})")
-                    
-            except Exception as e:
-                print(f"Error calling Gemini verifier: {e}")
-                score = 0.0
-            
-            scored_candidates.append((score, candidate))
-        
-        # Add unscored candidates with score 0.0 (due to rate limiting)
-        for candidate in candidates[len(candidates_to_score):]:
-            scored_candidates.append((0.0, candidate))
-        
-        return scored_candidates
+            screen_contexts: List of detected screen contexts.
 
-    def _prioritize_candidates(self, candidates: list[dict], goal: str) -> list[dict]:
-        """Prioritize candidates based on likely relevance to the goal.
-        
-        Args:
-            candidates: List of candidate action dictionaries.
-            goal: The task goal.
-            
         Returns:
-            Candidates sorted by likely relevance.
+            A list of (score, candidate_action) tuples.
         """
-        def candidate_priority(candidate):
-            score = 0
-            action_type = candidate.get('action_type', '')
-            text = candidate.get('text', '') or ''
+        if not candidates:
+            return []
+
+        ui_description = self._generate_ui_elements_description(ui_elements)
+        history_str = "\n".join(history) if history else "No actions taken yet."
+
+        # Create a numbered list of candidate actions for the prompt
+        candidate_lines = []
+        for i, candidate in enumerate(candidates):
+            action_desc = self._format_candidate_action(candidate)
+            candidate_lines.append(f"{i + 1}. {action_desc}")
+        candidates_str = "\n".join(candidate_lines)
+
+        # Construct the single prompt for batch verification
+        prompt = f"""You are controlling an Android device to complete this task: {goal}
+
+History of actions:
+{history_str}
+
+Current screen elements:
+{ui_description}
+
+I have the following candidate actions:
+{candidates_str}
+
+Please evaluate these actions and return a JSON object where keys are the
+candidate numbers and values are a score from 0.0 to 1.0, indicating
+how helpful the action is for achieving the goal.
+A score of 1.0 is for a clearly correct action.
+A score of 0.0 is for a clearly incorrect or irrelevant action.
+Provide only the JSON object in your response.
+"""
+
+        if self.verbose:
+            print(f"🔍 Verifying {len(candidates)} candidates in a single batch...")
+
+        try:
+            response, is_safe, _ = self.llm.predict(prompt)
+            if not is_safe or not response:
+                print("❌ Verification failed due to safety settings or empty response.")
+                return [(0.0, c) for c in candidates]
+
+            # Extract the JSON object from the response
+            json_str = response[response.find('{'):response.rfind('}') + 1]
+            scores = json.loads(json_str)
             
-            # Prioritize UI element actions over visual clicks
-            if 'index' in candidate:
-                score += 50
+            scored_candidates = []
+            for i, candidate in enumerate(candidates):
+                score = scores.get(str(i + 1), 0.0)
+                scored_candidates.append((float(score), candidate))
+
+            if self.verbose:
+                for score, candidate in scored_candidates:
+                    if score > 0:
+                        print(f"  ✅ {self._format_candidate_action(candidate)}: {score}")
             
-            # Prioritize certain action types
-            if action_type == 'click':
-                score += 30
-            elif action_type == 'input_text':
-                score += 40
-            elif action_type in ['navigate_home', 'navigate_back']:
-                score += 10
-            
-            # Boost candidates with relevant text
-            if 'contact' in goal.lower():
-                if any(word in text.lower() for word in ['contact', 'add', '+', 'new', 'create']):
-                    score += 100
-                if any(word in text.lower() for word in ['phone', 'number', 'name']):
-                    score += 80
-            
-            return score
-        
-        return sorted(candidates, key=candidate_priority, reverse=True)
+            return scored_candidates
+
+        except (json.JSONDecodeError, TypeError) as e:
+            print(f"❌ Error parsing LLM response: {e}")
+            return [(0.0, c) for c in candidates]
+        except Exception as e:
+            print(f"❌ An unexpected error occurred during verification: {e}")
+            return [(0.0, c) for c in candidates]
+
+    
 
     def _generate_ui_elements_description(self, ui_elements: list[representation_utils.UIElement]) -> str:
         """Generate a description of current UI elements for the verification prompt.
@@ -269,6 +248,88 @@ class VDroidAgent(base_agent.EnvironmentInteractingAgent):
             descriptions.append(f"... and {len(ui_elements) - 20} more elements")
             
         return "\n".join(descriptions)
+
+    def _detect_required_app_from_goal(self, goal: str) -> list[dict]:
+        """Detect which app needs to be opened based on the goal text (like M3A logic).
+        
+        Args:
+            goal: The task goal string.
+            
+        Returns:
+            List of candidate actions for opening the required app.
+        """
+        app_candidates = []
+        goal_lower = goal.lower()
+        
+        # App name mappings from goal text to actual app names
+        app_mappings = {
+            # Audio/Recording apps
+            'audio recorder': ['Audio Recorder', 'com.dimowner.audiorecorder'],
+            'record audio': ['Audio Recorder', 'com.dimowner.audiorecorder'],
+            'recording': ['Audio Recorder', 'com.dimowner.audiorecorder'],
+            
+            # Contact apps
+            'contact': ['Contacts', 'com.google.android.contacts', 'com.android.contacts'],
+            
+            # Messaging apps
+            'message': ['Messages', 'com.google.android.apps.messaging', 'com.android.mms'],
+            'sms': ['Messages', 'com.google.android.apps.messaging'],
+            'text': ['Messages', 'com.google.android.apps.messaging'],
+            
+            # Email apps
+            'email': ['Gmail', 'com.google.android.gm'],
+            'gmail': ['Gmail', 'com.google.android.gm'],
+            
+            # Calendar apps
+            'calendar': ['Calendar', 'com.google.android.calendar'],
+            'schedule': ['Calendar', 'com.google.android.calendar'],
+            'appointment': ['Calendar', 'com.google.android.calendar'],
+            
+            # Browser apps
+            'browser': ['Chrome', 'com.android.chrome'],
+            'chrome': ['Chrome', 'com.android.chrome'],
+            'web': ['Chrome', 'com.android.chrome'],
+            
+            # Phone apps
+            'call': ['Phone', 'com.google.android.dialer'],
+            'dial': ['Phone', 'com.google.android.dialer'],
+            'phone': ['Phone', 'com.google.android.dialer'],
+            
+            # Clock/Timer apps
+            'timer': ['Clock', 'com.google.android.deskclock'],
+            'alarm': ['Clock', 'com.google.android.deskclock'],
+            'stopwatch': ['Clock', 'com.google.android.deskclock'],
+            
+            # Settings
+            'setting': ['Settings', 'com.android.settings'],
+            'wifi': ['Settings', 'com.android.settings'],
+            'bluetooth': ['Settings', 'com.android.settings'],
+            
+            # Camera
+            'camera': ['Camera', 'com.google.android.GoogleCamera'],
+            'photo': ['Camera', 'com.google.android.GoogleCamera'],
+            'picture': ['Camera', 'com.google.android.GoogleCamera'],
+            
+            # File manager
+            'file': ['Files', 'com.google.android.apps.nbu.files'],
+            'folder': ['Files', 'com.google.android.apps.nbu.files'],
+        }
+        
+        # Find the best matching app
+        for keyword, app_names in app_mappings.items():
+            if keyword in goal_lower:
+                for app_name in app_names:
+                    app_candidates.append({
+                        'action_type': 'open_app', 
+                        'app_name': app_name,
+                        'text': f'Open {app_name} app'
+                    })
+                break  # Use first match to avoid duplicates
+        
+        if self.verbose and app_candidates:
+            print(f"🎯 Detected required app from goal: {[c['app_name'] for c in app_candidates]}")
+        
+        return app_candidates
 
     def _format_candidate_action(self, candidate: dict) -> str:
         """Format a candidate action dictionary into a readable description."""
@@ -326,7 +387,7 @@ class VDroidAgent(base_agent.EnvironmentInteractingAgent):
             AgentInteractionResult with execution details.
         """
         step_data = {
-            'step_number': len(self.history) + 1,
+            'v_droid_step': len(self.history) + 1,  # Renamed to avoid collision with constants.STEP_NUMBER
             'goal': goal,
             'candidates': [],
             'scores': [],
@@ -334,21 +395,18 @@ class VDroidAgent(base_agent.EnvironmentInteractingAgent):
             'execution_success': False,
         }
         
-        print(f'----------V-DROID Gemini Step {step_data["step_number"]}')
+        print(f'----------V-DROID Gemini Step {step_data["v_droid_step"]}')
         
         # Get current state
         state = self.get_post_transition_state()
-        
-        # Check if we need to open the Contacts app first
-        if step_data["step_number"] == 1 and 'contact' in goal.lower():
-            # For contact tasks, prioritize opening the Contacts app
-            contacts_candidates = [
-                {'action_type': 'open_app', 'app_name': 'Contacts'},
-                {'action_type': 'open_app', 'app_name': 'com.google.android.contacts'},
-            ]
+        screen_contexts = screen_analyzer.analyze_screen_for_context(state.ui_elements)
+
+        # Smart app opening based on goal analysis (like M3A)
+        if step_data["v_droid_step"] == 1:
+            app_candidates = self._detect_required_app_from_goal(goal)
             # Generate other candidates as fallback
             other_candidates = candidate_generation.generate_candidate_actions(state, goal)
-            candidates = contacts_candidates + other_candidates
+            candidates = app_candidates + other_candidates
         else:
             # Generate candidate actions using the proper V-DROID candidate generation
             candidates = candidate_generation.generate_candidate_actions(state, goal)
@@ -357,21 +415,31 @@ class VDroidAgent(base_agent.EnvironmentInteractingAgent):
         
         if self.verbose:
             print(f"📋 Generated {len(candidates)} candidate actions")
-            candidate_summary = candidate_generation.format_candidates_for_display(candidates[:10])  # Show first 10
-            print(candidate_summary)
+            # Show first 10 for readability, but indicate total count
+            if len(candidates) > 10:
+                display_candidates = candidates[:10]
+                print(f"First 10 candidates (out of {len(candidates)} total):")
+                for i, candidate in enumerate(display_candidates):
+                    action_desc = self._format_candidate_action(candidate)
+                    print(f"  {i+1}. {action_desc}")
+                print(f"  ... and {len(candidates) - 10} more candidates")
+            else:
+                candidate_summary = candidate_generation.format_candidates_for_display(candidates)
+                print(candidate_summary)
         
         if not candidates:
             print("❌ No candidate actions generated")
             step_data['selected_action'] = {'action_type': 'status', 'goal_status': 'infeasible'}
-            self.history.append(f"Step {step_data['step_number']}: No valid candidates found")
+            self.history.append(f"Step {step_data['v_droid_step']}: No valid candidates found")
             return base_agent.AgentInteractionResult(True, step_data)
         
         # Score candidates using Gemini verifier
         scored_candidates = self._score_candidate_actions(
-            goal, 
-            self.history, 
-            state.ui_elements, 
-            candidates
+            goal,
+            self.history,
+            state.ui_elements,
+            candidates,
+            screen_contexts
         )
         step_data['scores'] = [score for score, _ in scored_candidates]
         
@@ -379,7 +447,7 @@ class VDroidAgent(base_agent.EnvironmentInteractingAgent):
         if not scored_candidates:
             print("❌ No candidates were scored")
             step_data['selected_action'] = {'action_type': 'status', 'goal_status': 'infeasible'}
-            self.history.append(f"Step {step_data['step_number']}: No candidates could be scored")
+            self.history.append(f"Step {step_data['v_droid_step']}: No candidates could be scored")
             return base_agent.AgentInteractionResult(True, step_data)
         
         # Find best action
@@ -392,7 +460,7 @@ class VDroidAgent(base_agent.EnvironmentInteractingAgent):
         if best_action.get('action_type') == 'status':
             print("🏁 Agent indicates task completion")
             action_description = f"Marked task as {best_action.get('goal_status', 'complete')}"
-            self.history.append(f"Step {step_data['step_number']}: {action_description}")
+            self.history.append(f"Step {step_data['v_droid_step']}: {action_description}")
             step_data['execution_success'] = True
             return base_agent.AgentInteractionResult(True, step_data)
         
@@ -406,14 +474,14 @@ class VDroidAgent(base_agent.EnvironmentInteractingAgent):
             time.sleep(self.wait_after_action_seconds)
             
             action_description = self._format_candidate_action(best_action)
-            self.history.append(f"Step {step_data['step_number']}: {action_description}")
+            self.history.append(f"Step {step_data['v_droid_step']}: {action_description}")
             step_data['execution_success'] = True
             
             print(f"✅ Action executed successfully")
             
         except Exception as e:
             print(f"❌ Failed to execute action: {e}")
-            self.history.append(f"Step {step_data['step_number']}: Failed to execute action")
+            self.history.append(f"Step {step_data['v_droid_step']}: Failed to execute action")
             step_data['execution_success'] = False
         
         return base_agent.AgentInteractionResult(False, step_data)
@@ -430,6 +498,10 @@ def create_v_droid_agent(
         env: The Android environment.
         model_name: The Gemini model to use as verifier.
         **kwargs: Additional arguments passed to VDroidAgent constructor.
+            Supports batch processing options:
+            - enable_batch_verification: Whether to use batch processing (default: True)
+            - batch_size: Maximum candidates per batch (default: 0 = no limit)
+            - batch_delay_ms: Optional additional delay in ms (default: 0 = router handles delays)
         
     Returns:
         Configured VDroidAgent.

@@ -1,4 +1,13 @@
 absl-py==2.1.0
+# For V-DROID Training
+torch
+transformers
+datasets
+peft
+trl
+bitsandbytes
+accelerate
+
 android_env==1.2.3
 dm_env==1.6
 easyocr

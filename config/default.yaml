@@ -107,6 +107,11 @@ agent:
       # Whether to enable the built-in Gemini safety checks.
       enable_safety_checks: true
 
+      # Batch processing settings for rate limit optimization
+      enable_batch_verification: true  # Use batch processing for candidate verification
+      batch_size: 0  # Maximum candidates to process in one batch (0 = no limit)
+      batch_delay_ms: 0  # Additional delay between requests in ms (0 = rely on router's smart delays)
+
     # Configuration for the V-DROID Ollama agent (local inference)
     v_droid_ollama:
       # This name must match the agent's name in the registry.
@@ -140,9 +145,9 @@ agent:
 task:
   # Specific task to run. If null, a random/full suite is used.
   # Example: "ContactsAddContact"
-  name: "ContactsAddContact"
+  name: ""  # Empty string = run random/full suite
   suite_family: "android_world"
-  n_task_combinations: 1 # For "full" mode
+  n_task_combinations: 1  # For "full" mode
   random_seed: 30
 
 

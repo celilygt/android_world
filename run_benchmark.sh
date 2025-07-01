@@ -235,9 +235,12 @@ build_python_command() {
     local base_cmd
     local common_flags="--agent_name=\"$agent_registry_name\""
     
-    # Append all agent-specific flags, excluding registry_name
+    # Append all agent-specific flags, excluding registry_name and V-DROID-specific batch parameters
     for var in $(compgen -v agent_); do
-        if [ "$var" != "agent_registry_name" ]; then
+        if [ "$var" != "agent_registry_name" ] && 
+           [ "$var" != "agent_batch_delay_ms" ] && 
+           [ "$var" != "agent_batch_size" ] && 
+           [ "$var" != "agent_enable_batch_verification" ]; then
             key_name=$(echo "$var" | sed 's/agent_//')
             value=${!var}
             [ -n "$value" ] && common_flags="$common_flags --$key_name=\"$value\""

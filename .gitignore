@@ -30,3 +30,6 @@ runs/
 *.xml
 
 Agent-S-main
+
+emulator.log
+*.md

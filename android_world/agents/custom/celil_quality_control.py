@@ -17,32 +17,20 @@
 from android_world.agents.llm_wrappers.base_wrapper import MultimodalLlmWrapper
 import json
 
-PRAGMATIST_PROMPT = """You are a pragmatist. Analyze the screenshot and determine if the proposed action is a logical step towards the sub-goal.
+CONSOLIDATED_VERIFIER_PROMPT = """You are a critical supervisor for an Android agent. Analyze the screenshot and proposed action.
+    Evaluate the action from three perspectives:
+    1.  **Pragmatist**: Is this a logical, direct step towards the sub-goal?
+    2.  **Skeptic**: What's the risk of failure? Does it rely on misinterpreting the UI?
+    3.  **Efficiency Expert**: Is there a more direct or simpler way to do this?
 
-Sub-goal: {sub_goal}
-Proposed Action: {proposed_action}
-Context: {context_summary}
-Current Screen: {observation_summary}
+    Sub-goal: {sub_goal}
+    Context: {context_summary}
+    Proposed Action: {proposed_action}
+    Current Screen: {observation_summary}
 
-Look at the screenshot. Is this action correct and likely to work? JSON: {{"score": 0-10, "reasoning": "..."}}"""
-
-SKEPTIC_PROMPT = """You are a skeptic. Examine the screenshot carefully for potential flaws and risks in the proposed action.
-
-Sub-goal: {sub_goal}  
-Proposed Action: {proposed_action}
-Context: {context_summary}
-Current Screen: {observation_summary}
-
-Looking at the screenshot, how likely is this to fail? Consider UI misinterpretation, wrong elements, etc. JSON: {{"score": 0-10, "reasoning": "..."}}"""
-
-EFFICIENCY_EXPERT_PROMPT = """You are an efficiency expert. Study the screenshot to determine if this is the most efficient way to achieve the sub-goal.
-
-Sub-goal: {sub_goal}
-Proposed Action: {proposed_action}
-Context: {context_summary}
-Current Screen: {observation_summary}
-
-Based on the screenshot, is there a more direct or efficient approach? JSON: {{"score": 0-10, "reasoning": "..."}}"""
+    Return a single JSON object with a score (0-10) and brief reasoning for each persona.
+    Example: {{"pragmatist": {{"score": 9, "reasoning": "..."}}, "skeptic": {{"score": 8, "reasoning": "..."}}, "efficiency_expert": {{"score": 6, "reasoning": "..."}}}}
+    """
 
 
 class VerifierEnsemble:
@@ -57,56 +45,48 @@ class VerifierEnsemble:
     return observation.get('summary', 'No observation summary available')
 
   def verify_action(
-      self, sub_goal: str, proposed_action: dict, observation: dict, context_summary: str
-  ) -> tuple[float, dict]:
-    """Verifies an action using an ensemble of verifiers with visual analysis."""
-    scores = {}
-    reasoning = {}
-    
-    # Create a concise observation summary and limit other inputs
-    observation_summary = self._create_observation_summary(observation)
-    action_str = str(proposed_action)[:200]
-    limited_context = context_summary[:300] if context_summary else ""
+        self, sub_goal: str, proposed_action: dict, observation: dict, context_summary: str
+    ) -> tuple[float, dict]:
+        """Verifies an action using a single, consolidated verifier call."""
+        observation_summary = self._create_observation_summary(observation)
+        action_str = str(proposed_action)[:200]
+        limited_context = context_summary[:300] if context_summary else ""
 
-    for persona, prompt_template in [
-        ("pragmatist", PRAGMATIST_PROMPT),
-        ("skeptic", SKEPTIC_PROMPT), 
-        ("efficiency_expert", EFFICIENCY_EXPERT_PROMPT),
-    ]:
-      prompt = prompt_template.format(
-          sub_goal=sub_goal,
-          proposed_action=action_str,
-          context_summary=limited_context,
-          observation_summary=observation_summary,
-      )
-      
-      # Use multimodal prediction with screenshot for better verification (NOW FREE!)
-      response, _, _ = self.llm_wrapper.predict_mm(prompt, [observation['screenshot']])
-      try:
-        data = json.loads(response)
-        scores[persona] = data.get("score", 0)
-        reasoning[persona] = data.get("reasoning", "")
-      except json.JSONDecodeError:
-        # Try to extract score from response if JSON parsing fails
+        prompt = CONSOLIDATED_VERIFIER_PROMPT.format(
+            sub_goal=sub_goal,
+            proposed_action=action_str,
+            context_summary=limited_context,
+            observation_summary=observation_summary,
+        )
+
+        response, _, _ = self.llm_wrapper.predict_mm(prompt, [observation['screenshot']])
+        
+        scores = {}
+        reasoning = {}
+        
         try:
-          if "score" in response.lower():
-            # Look for patterns like "score": 7 or "score: 7"
-            import re
-            score_match = re.search(r'"?score"?\s*[:=]\s*(\d+)', response.lower())
-            if score_match:
-              scores[persona] = int(score_match.group(1))
-            else:
-              scores[persona] = 5  # Default middle score
-          else:
-            scores[persona] = 5
-        except Exception:
-          scores[persona] = 5
-        reasoning[persona] = f"Parsing issue: {response[:100]}..."
+            data = json.loads(response)
+            prag_data = data.get("pragmatist", {})
+            skep_data = data.get("skeptic", {})
+            eff_data = data.get("efficiency_expert", {})
 
-    final_score = (
-        0.4 * scores.get("pragmatist", 0)
-        + 0.5 * scores.get("skeptic", 0)
-        + 0.1 * scores.get("efficiency_expert", 0)
-    )
+            scores["pragmatist"] = prag_data.get("score", 0)
+            reasoning["pragmatist"] = prag_data.get("reasoning", "")
+            
+            scores["skeptic"] = skep_data.get("score", 0)
+            reasoning["skeptic"] = skep_data.get("reasoning", "")
 
-    return final_score, reasoning
+            scores["efficiency_expert"] = eff_data.get("score", 0)
+            reasoning["efficiency_expert"] = eff_data.get("reasoning", "")
+
+        except (json.JSONDecodeError, AttributeError):
+            scores = {"pragmatist": 5, "skeptic": 5, "efficiency_expert": 5}
+            reasoning = {"error": f"Failed to parse verifier response: {response[:100]}"}
+
+        final_score = (
+            0.4 * scores.get("pragmatist", 0)
+            + 0.5 * scores.get("skeptic", 0)
+            + 0.1 * scores.get("efficiency_expert", 0)
+        )
+
+        return final_score, reasoning

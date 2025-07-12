@@ -59,6 +59,10 @@ agent:
       # Agent timing
       transition_pause: 1.0
 
+      # Speed & Optimization Settings
+      speed_mode: true                # Master toggle for all optimizations.
+      qc_fast_threshold: 8.0          # Confidence score from Section Leader to bypass QC.
+
     # Configuration for the M3A OpenRouter agent
     m3a_openrouter:
       # This name must match the agent's name in the registry.

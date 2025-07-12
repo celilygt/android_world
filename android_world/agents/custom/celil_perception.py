@@ -79,19 +79,23 @@ class PerceptionModule:
     except Exception:
       return []
 
-  def process_observation(self, state: interface.State) -> dict:
+  def process_observation(self, state: interface.State, deep_analysis: bool = False) -> dict:
     """Processes a raw state from the environment.
 
     Args:
       state: The raw state from the environment.
+      deep_analysis: Whether to perform a deep, LLM-powered analysis.
 
     Returns:
       A dictionary containing the structured observation.
     """
     screenshot = state.pixels
     
-    # Get enhanced visual analysis if LLM wrapper is available
-    enhanced_elements = self._get_enhanced_visual_analysis(screenshot)
+    # Get enhanced visual analysis if LLM wrapper is available and deep analysis is requested
+    if deep_analysis:
+        enhanced_elements = self._get_enhanced_visual_analysis(screenshot)
+    else:
+        enhanced_elements = []
     
     try:
       ocr_data = pytesseract.image_to_data(

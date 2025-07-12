@@ -50,6 +50,10 @@ class CelilAgent(base_agent.EnvironmentInteractingAgent):
     transition_pause = kwargs.get("transition_pause", 1.0)
     super().__init__(env, name=name, transition_pause=transition_pause)
     
+    self.speed_mode = kwargs.get("speed_mode", False)
+    self.qc_fast_threshold = kwargs.get("qc_fast_threshold", 8.0)
+    agent_logger.info(f"⚡ SPEED MODE: {'Enabled' if self.speed_mode else 'Disabled'}")
+    
     agent_logger.info("🚀 AGENT INITIALIZATION STARTED")
     
     # Create separate LLM wrappers according to the architecture:
@@ -98,6 +102,10 @@ class CelilAgent(base_agent.EnvironmentInteractingAgent):
     self.working_memory = None
     self.perception = PerceptionModule(qwen_wrapper)  # Enhanced visual understanding with Qwen VL
     self.tools = None
+    
+    self.last_observation_cache = None
+    self.last_screenshot_phash = None
+    self.micro_correction_retries = 0
     
     # Log the proper architecture setup
     agent_logger.info("✅ AGENT INITIALIZATION COMPLETE")
@@ -225,13 +233,33 @@ class CelilAgent(base_agent.EnvironmentInteractingAgent):
           done=True, data={"reason": "Plan complete."}
       )
 
-    sub_goal = self.working_memory.pop_sub_goal()
     agent_logger.info(f"🎯 SUB-GOAL: Executing next step: '{sub_goal}'")
     
-    agent_logger.info("👁️ PERCEPTION: Processing current screen observation...")
-    agent_logger.info("   🤖 LLM CALL INCOMING: Qwen VL for visual understanding")
-    observation = self.perception.process_observation(self.get_post_transition_state())
-    agent_logger.info(f"   ✅ PERCEPTION COMPLETE: {len(observation.get('summary', ''))} chars summary")
+    from PIL import Image
+    import imagehash
+
+    current_state = self.get_post_transition_state()
+    current_phash = imagehash.phash(Image.fromarray(current_state.pixels))
+    agent_logger.info(f"🖼️  Screen p-hash: {current_phash}")
+    
+    # Determine if we need a deep, LLM-powered analysis
+    is_first_step_of_plan = len(self.working_memory.data['history']) == 0
+    needs_deep_analysis = not self.speed_mode or is_first_step_of_plan
+
+    if self.speed_mode and self.last_observation_cache and current_phash == self.last_screenshot_phash:
+        agent_logger.info("🧠 PERCEPTION CACHE: Screen unchanged, using cached observation.")
+        observation = self.last_observation_cache
+    else:
+        if needs_deep_analysis:
+            agent_logger.info("👁️  PERCEPTION (DEEP): Screen changed or deep analysis required...")
+            agent_logger.info("   🤖 LLM CALL INCOMING: Qwen VL for visual understanding")
+        else:
+            agent_logger.info("👁️  PERCEPTION (SHALLOW): Screen changed, using OCR/UI Tree only.")
+        
+        # NOTE: This requires modifying the perception module next (Feature 3)
+        observation = self.perception.process_observation(current_state, deep_analysis=needs_deep_analysis)
+        self.last_observation_cache = observation
+        self.last_screenshot_phash = current_phash
     
     context_summary = self.working_memory.get_context_summary()
     agent_logger.info(f"🧠 CONTEXT: Retrieved {len(context_summary)} chars of context summary")
@@ -239,32 +267,36 @@ class CelilAgent(base_agent.EnvironmentInteractingAgent):
     # Generate action using UI-TARS (returns JSON string)
     agent_logger.info("🎯 SECTION LEADER: Generating action with UI-TARS...")
     agent_logger.info("   🤖 LLM CALL INCOMING: UI-TARS for action generation")
-    action_json_str = self.section_leader.generate_action(
+    action_dict, confidence = self.section_leader.generate_action(
         sub_goal, observation["summary"], context_summary
     )
-    agent_logger.info(f"   ✅ SECTION LEADER COMPLETE: Generated action")
+    agent_logger.info(f"   ✅ SECTION LEADER COMPLETE: Generated action with confidence {confidence:.1f}")
 
     # Parse the JSON string to dict
     try:
       import json
       # Check if it's already a dict (from agent_utils.extract_json)
-      if isinstance(action_json_str, dict):
-        proposed_action = action_json_str
+      if isinstance(action_dict, dict):
+        proposed_action = action_dict
       else:
-        proposed_action = json.loads(action_json_str)
+        proposed_action = json.loads(action_dict)
       agent_logger.info(f"📋 ACTION PARSED: {proposed_action}")
     except (json.JSONDecodeError, TypeError) as e:
-      agent_logger.error(f"❌ ACTION PARSING FAILED: {e}. Raw response: {action_json_str}")
-      logging.error(f"Failed to parse action JSON: {e}. Raw response: {action_json_str}")
+      agent_logger.error(f"❌ ACTION PARSING FAILED: {e}. Raw response: {action_dict}")
+      logging.error(f"Failed to parse action JSON: {e}. Raw response: {action_dict}")
       # Use fallback action
       proposed_action = {"action_type": "wait", "time": 1.0}
       agent_logger.info(f"🔧 FALLBACK ACTION: Using wait action")
 
-    agent_logger.info("✅ QUALITY CONTROL: Verifying proposed action...")
-    agent_logger.info("   🤖 LLM CALL INCOMING: Gemini for action verification")
-    score, reasoning = self.quality_control.verify_action(
-        sub_goal, proposed_action, observation, context_summary
-    )
+    if self.speed_mode and confidence >= self.qc_fast_threshold:
+        agent_logger.info(f"⚡ SPEED MODE: Action generator is confident ({confidence:.1f}). Skipping verifier.")
+        score, reasoning = 10.0, {"reasoning": "Fast-passed due to high generator confidence."}
+    else:
+        agent_logger.info(f"✅ QUALITY CONTROL: Verifying proposed action (Confidence: {confidence:.1f})...")
+        agent_logger.info("   🤖 LLM CALL INCOMING: Gemini for action verification (Consolidated)")
+        score, reasoning = self.quality_control.verify_action(
+            sub_goal, proposed_action, observation, context_summary
+        )
     agent_logger.info(f"   ✅ QUALITY CONTROL COMPLETE: Score = {score}/10")
     reasoning_str = str(reasoning) if reasoning else "No reasoning provided"
     agent_logger.info(f"   💭 REASONING: {reasoning_str[:150]}{'...' if len(reasoning_str) > 150 else ''}")
@@ -294,6 +326,7 @@ class CelilAgent(base_agent.EnvironmentInteractingAgent):
             'outcome': outcome
         })
         agent_logger.info("💾 MEMORY: Recorded successful step")
+        self.micro_correction_retries = 0 # Reset on success
         
       except Exception as e:
         agent_logger.error(f"❌ ACTION EXECUTION FAILED: {e}")
@@ -308,30 +341,32 @@ class CelilAgent(base_agent.EnvironmentInteractingAgent):
         agent_logger.info("💾 MEMORY: Recorded execution error")
         
     else:
-      agent_logger.warning(f"🚫 ACTION REJECTED: Score {score} < 7.0, triggering rehearsal loop")
-      # Rehearsal loop trigger
-      failure_context = {
-          'goal': goal,
-          'original_plan': self.working_memory.get_plan(),
-          'failed_sub_goal': sub_goal,
-          'failed_action': proposed_action,
-          'verifier_feedback': reasoning,
-          'observation': observation
-      }
-      agent_logger.info("🔄 REHEARSAL: Generating corrective plan...")
-      agent_logger.info("   🤖 LLM CALL INCOMING: Gemini for corrective planning")
-      new_plan = self.maestro.generate_corrective_plan(failure_context)
-      agent_logger.info(f"   ✅ CORRECTIVE PLAN: Generated {len(new_plan)} new steps")
-      
-      self.working_memory.set_plan(new_plan)
-      self.working_memory.add_step({
-          'sub_goal': sub_goal,
-          'action': proposed_action,
-          'score': score,
-          'reasoning': reasoning,
-          'outcome': 'rejected'
-      })
-      agent_logger.info("💾 MEMORY: Recorded rejected action and updated plan")
+        self.micro_correction_retries += 1
+        agent_logger.warning(f"🚫 ACTION REJECTED: Score {score} < 7.0")
+
+        # Add the failure to working memory for context
+        self.working_memory.add_step({
+            'sub_goal': sub_goal, 'action': proposed_action, 'score': score,
+            'reasoning': reasoning, 'outcome': 'rejected_for_retry'
+        })
+        
+        if self.micro_correction_retries > 1:
+            agent_logger.error("💥 MICRO-CORRECTION FAILED: Too many retries. Escalating to Maestro for full re-plan.")
+            # This is the original rehearsal logic
+            failure_context = {
+                'goal': goal, 'original_plan': self.working_memory.get_plan(),
+                'failed_sub_goal': sub_goal, 'failed_action': proposed_action,
+                'verifier_feedback': reasoning, 'observation': observation
+            }
+            new_plan = self.maestro.generate_corrective_plan(failure_context)
+            self.working_memory.set_plan(new_plan)
+            self.micro_correction_retries = 0 # Reset after re-plan
+        else:
+            agent_logger.warning(f"🔄 MICRO-CORRECTION: Attempting local retry ({self.micro_correction_retries}/1)...")
+            # We simply end the step here. The next call to step() will retry the same sub_goal
+            # with the added failure context in its history.
+            # We need to re-add the sub_goal to the front of the plan.
+            self.working_memory.get_plan().insert(0, sub_goal)
 
     remaining_steps = len(self.working_memory.get_plan())
     agent_logger.info(f"📊 STEP SUMMARY: {remaining_steps} steps remaining in plan")

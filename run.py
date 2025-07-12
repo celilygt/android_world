@@ -209,6 +209,14 @@ _MAX_TOKENS = flags.DEFINE_integer(
     'max_tokens', 2048, 'Maximum tokens for LLM responses.'
 )
 
+_QC_FAST_THRESHOLD = flags.DEFINE_float( ### <--- ADD THIS LINE (Step 1)
+    'qc_fast_threshold', 8.0, 'Confidence score from Section Leader to bypass QC.'
+)
+
+_SPEED_MODE = flags.DEFINE_boolean( ### <--- ADD THIS LINE (Step 1)
+    'speed_mode', True, 'Master toggle for all Celil agent optimizations.'
+)
+
 # MiniWoB is very lightweight and new screens/View Hierarchy load quickly.
 _MINIWOB_TRANSITION_PAUSE = 0.2
 
@@ -245,7 +253,7 @@ def _get_agent(
       'verbose': _VERBOSE.value,
       'enable_safety_checks': _ENABLE_SAFETY_CHECKS.value,
   }
-  
+
   # Add optional parameters if they are provided
   if _MODEL_NAME.value is not None:
     agent_kwargs['model_name'] = _MODEL_NAME.value
@@ -259,7 +267,7 @@ def _get_agent(
     agent_kwargs['max_retry'] = _MAX_RETRY.value
   if _WAIT_AFTER_ACTION_SECONDS.value is not None:
     agent_kwargs['wait_after_action_seconds'] = _WAIT_AFTER_ACTION_SECONDS.value
-  
+
   # Celil Agent specific parameters
   if _TRANSITION_PAUSE.value is not None:
     agent_kwargs['transition_pause'] = _TRANSITION_PAUSE.value
@@ -273,6 +281,10 @@ def _get_agent(
     agent_kwargs['high_credits'] = _HIGH_CREDITS.value
   if _MAX_TOKENS.value is not None:
     agent_kwargs['max_tokens'] = _MAX_TOKENS.value
+  if _QC_FAST_THRESHOLD.value is not None: ### <--- ADD THIS LINE (Step 2)
+    agent_kwargs['qc_fast_threshold'] = _QC_FAST_THRESHOLD.value
+  if _SPEED_MODE.value is not None: ### <--- ADD THIS LINE (Step 2)
+    agent_kwargs['speed_mode'] = _SPEED_MODE.value
 
   agent = agent_registry.get_agent(
       name=_AGENT_NAME.value,
@@ -289,7 +301,7 @@ def _get_agent(
       and hasattr(agent, 'set_task_guidelines')
   ):
     agent.set_task_guidelines(_MINIWOB_ADDITIONAL_GUIDELINES)
-  
+
   agent.name = _AGENT_NAME.value # Keep this for logging/output consistency.
 
   return agent
@@ -298,24 +310,24 @@ def _get_agent(
 def _main() -> None:
   """Runs eval suite and gets rewards back."""
   global _accumulated_results
-  
+
   # Immediate output to test buffering
   print("🚀 Python process started - initializing...")
   sys.stdout.flush()
-  
+
   # Set up signal handlers for graceful shutdown
   signal.signal(signal.SIGINT, _signal_handler)
   signal.signal(signal.SIGTERM, _signal_handler)
-  
+
   print("🔧 Loading environment...")
   sys.stdout.flush()
-  
+
   env = env_launcher.load_and_setup_env(
       console_port=_DEVICE_CONSOLE_PORT.value,
       emulator_setup=_EMULATOR_SETUP.value,
       adb_path=_ADB_PATH.value,
   )
-  
+
   print("✅ Environment loaded successfully")
   sys.stdout.flush()
 
@@ -332,9 +344,9 @@ def _main() -> None:
 
   print("🤖 Initializing agent...")
   sys.stdout.flush()
-  
+
   agent = _get_agent(env, _SUITE_FAMILY.value)
-  
+
   print(f"✅ Agent initialized: {agent.name}")
   sys.stdout.flush()
 
@@ -353,18 +365,18 @@ def _main() -> None:
       f'🚀 Starting eval with agent {_AGENT_NAME.value} and writing to'
       f' {checkpoint_dir}'
   )
-  
+
   try:
     # Use custom process function that accumulates results
     def accumulate_results(episodes: list[Dict[str, Any]], print_summary: bool = False):
       global _accumulated_results
       _accumulated_results = episodes.copy()
       return suite_utils.process_episodes(episodes, print_summary)
-    
+
     # Optionally add verbosity similar to minimal runner
     if _VERBOSE.value:
       original_run_task = suite_utils._run_task
-      
+
       def verbose_run_task(task, run_episode_fn, env, demo_mode=False):
         print(f"\n🎯 Starting task: {task.name}")
         print(f"📋 Goal: {task.goal}")
@@ -372,11 +384,11 @@ def _main() -> None:
         print(f"🎮 Max Steps: {int(task.complexity * 10)}")
         print("=" * 80)
         sys.stdout.flush()
-        
+
         # Call original function but with enhanced episode runner
         def enhanced_run_episode(task_arg):
           print(f"\n🚀 Running episode for: {task_arg.name}")
-          
+
           # Create custom print function for verbose output
           def step_print(msg):
             if 'Completed step' in msg:
@@ -391,7 +403,7 @@ def _main() -> None:
             else:
               print(msg)
             sys.stdout.flush()
-          
+
           return episode_runner.run_episode(
               goal=task_arg.goal,
               agent=agent,
@@ -399,9 +411,9 @@ def _main() -> None:
               start_on_home_screen=task_arg.start_on_home_screen,
               print_fn=step_print,
           )
-        
+
         result = original_run_task(task, enhanced_run_episode, env, demo_mode)
-        
+
         # Add completion status similar to minimal runner
         is_successful = result.get('is_successful', 0) > 0.5
         episode_data = result.get('episode_data', {})
@@ -410,19 +422,19 @@ def _main() -> None:
           steps_taken = len(episode_data.get('step_number', []))
         else:
           steps_taken = 0
-        
+
         print(f"\n📊 Task Results:")
-        print(f"   Task: {task.name}")  
+        print(f"   Task: {task.name}")
         print(f"   Steps taken: {steps_taken}")
         print(f"   Task successful: {'Yes' if is_successful else 'No'}")
         print(f"   Result: {'✅ Passed' if is_successful else '❌ Failed'}")
         sys.stdout.flush()
-        
+
         return result
-      
+
       # Temporarily replace the function
       suite_utils._run_task = verbose_run_task
-    
+
     results = suite_utils.run(
         suite,
         agent,
@@ -430,29 +442,29 @@ def _main() -> None:
         demo_mode=False,
         process_episodes_fn=accumulate_results,
     )
-    
+
     # Restore original function if we patched it
     if _VERBOSE.value:
       suite_utils._run_task = original_run_task
-    
+
     # If we get here without interruption, show final results
     if not _interrupted:
       print(f"\n🎉 Evaluation completed successfully!")
       print(f"📊 Final Results Summary:")
-      
+
       total_tasks = len(_accumulated_results)
       successful_tasks = sum(1 for r in _accumulated_results if r.get('is_successful', 0) > 0.5)
       success_rate = (successful_tasks / total_tasks * 100) if total_tasks > 0 else 0
-      
+
       print(f"   Total tasks: {total_tasks}")
       print(f"   Successful: {successful_tasks}")
       print(f"   Success rate: {success_rate:.1f}%")
       print(f"   Results saved to: {checkpoint_dir}")
-    
+
   except KeyboardInterrupt:
     print(f"\n⚠️  Keyboard interrupt received during execution")
     _signal_handler(signal.SIGINT, None)
-  
+
   finally:
     # Always try to save results if we have any
     if _accumulated_results:
@@ -463,7 +475,7 @@ def _main() -> None:
         print(f"✅ Results preserved in: {checkpoint_dir}")
       except Exception as e:
         print(f"⚠️  Warning: Could not save final results: {e}")
-    
+
     print(
         f'🏁 Finished running agent {_AGENT_NAME.value} on {_SUITE_FAMILY.value}'
         f' family. Results in {checkpoint_dir}.'

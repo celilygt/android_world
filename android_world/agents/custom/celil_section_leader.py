@@ -84,7 +84,7 @@ class UITarsActionGenerator:
       sub_goal: str, 
       annotated_observation: str, 
       context_summary: str = ""
-  ) -> str:
+  ) -> tuple[dict, float]:
     """Generate a JSON action based on the current screen and goal.
     
     Args:
@@ -93,7 +93,7 @@ class UITarsActionGenerator:
         context_summary: Summary of recent actions taken
         
     Returns:
-        JSON string representing the action to take
+        A tuple containing the action dictionary and a confidence score.
     """
     try:
       # Handle "open app" sub-goals directly
@@ -105,7 +105,7 @@ class UITarsActionGenerator:
           app_name = match.group(1).strip()
           action = {"action_type": "open_app", "app_name": app_name}
           print(f"🎯 Direct app opening action: {action}")
-          return action  # Return the dict directly - it will be handled correctly in the agent
+          return action, 9.5  # High confidence for direct match
       
       # Prepare the prompt
       prompt = UI_TARS_PROMPT_TEMPLATE.format(
@@ -122,21 +122,27 @@ class UITarsActionGenerator:
       
       if not response:
         print("⚠️ UI-TARS returned empty response")
-        return self._get_fallback_action()
+        return self._get_fallback_action(), 2.0
       
       # Try to extract and validate JSON from response
       cleaned_action = agent_utils.extract_json(response)
       
       if cleaned_action:
         print(f"✅ UI-TARS generated action: {cleaned_action}")
-        return cleaned_action
+        # Placeholder confidence: high if successful, low if fallback
+        confidence = 9.0 
+        return cleaned_action, confidence
       else:
         print(f"⚠️ Could not extract valid JSON from UI-TARS response: {response[:200]}...")
-        return self._get_fallback_action()
+        fallback_action = self._get_fallback_action()
+        confidence = 2.0 
+        return fallback_action, confidence
         
     except Exception as e:
       print(f"❌ Error in UI-TARS action generation: {e}")
-      return self._get_fallback_action()
+      fallback_action = self._get_fallback_action()
+      confidence = 2.0 
+      return fallback_action, confidence
 
   def generate_action_with_screenshot(
       self,

@@ -16,9 +16,53 @@
 
 from android_world.agents.llm_wrappers.base_wrapper import MultimodalLlmWrapper
 
-PLANNER_PROMPT_TEMPLATE = """You are a master strategist for an Android agent. Analyze the screenshot and break down the goal into simple sub-goals.
+PLANNER_PROMPT_TEMPLATE = """You are the Maestro, a master planner for an Android assistant. Your primary role is to develop a high-level, step-by-step plan to accomplish a user's goal.
 
-Goal: "{goal}"
+**Your first and most critical task is to identify the correct application to open.**
+
+Based on the user's goal, you must determine which single application is best suited for the task. Your first step in the plan should almost always be to open an app.
+
+Here is a list of available applications and their common uses:
+
+*   **System & Core Apps:**
+    *   `camera`: For taking photos or recording videos.
+    *   `chrome`: For browsing websites, searching, or any web-related task.
+    *   `clock`: For setting alarms, timers, or using the stopwatch.
+    *   `contacts`: For managing, adding, or searching for contacts.
+    *   `dialer` or `phone`: For making phone calls.
+    *   `files`: For managing files and folders on the device.
+    *   `settings`: For changing device settings like Wi-Fi, Bluetooth, etc.
+    *   `simple sms messenger`: For sending and receiving text messages (SMS).
+
+*   **Productivity & Tools:**
+    *   `audio recorder`: For recording audio.
+    *   `clipper`: For managing the clipboard.
+    *   `joplin`: For taking notes and managing to-do lists.
+    *   `markor`: For writing and editing notes in Markdown format.
+    *   `osmand`: For maps, navigation, and location-based tasks.
+    *   `simple calendar pro`: For managing schedules, events, and appointments.
+    *   `tasks`: For managing to-do lists and tasks.
+
+*   **Media & Entertainment:**
+    *   `retro music`: For listening to music.
+    *   `simple draw pro`: For drawing and sketching.
+    *   `simple gallery pro`: For viewing and managing photos and videos.
+    *   `vlc`: For playing video files.
+
+*   **Other Apps:**
+    *   `android world`: The testing application itself.
+    *   `miniwob`: A specialized app for web-based tasks.
+    *   `pro expense`: For tracking expenses.
+    *   `broccoli app`: A recipe application.
+    *   `open tracks sports tracker`: For tracking sports activities.
+
+**Instructions:**
+
+1.  Analyze the user's goal: "{goal}"
+2.  From the list above, select the single best app to accomplish the goal.
+3.  Your first step in the generated plan must be `Open the {{app_name}} app`.
+4.  If no specific app seems appropriate, you may omit the "open app" step, but this should be rare.
+5.  After the "open app" step, create a sequence of logical, high-level steps to achieve the user's goal within that app.
 
 Current Screen Analysis:
 Text visible: {ocr_summary}
@@ -26,14 +70,7 @@ Interactive elements: {ui_summary}
 
 {retrieved_plan_section}
 
-Based on the screenshot and this information, provide a numbered list of sub-goals. Each sub-goal should be a single, clear instruction.
-
-Example:
-1. Open the Files app.
-2. Navigate to Downloads folder.
-3. Select report.pdf file.
-4. Tap delete button.
-5. Confirm deletion.
+Based on all this information, provide a numbered list of sub-goals.
 """
 
 CORRECTIVE_PROMPT_TEMPLATE = """You are an expert agent supervisor. An agent has failed and needs a new plan. Analyze the current screenshot to understand the situation.

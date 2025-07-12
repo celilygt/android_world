@@ -75,7 +75,7 @@ class CelilAgent(base_agent.EnvironmentInteractingAgent):
     # 3. Gemma for high-volume verification tasks (cheaper than Gemini)
     agent_logger.info("🔧 Initializing Gemma wrapper for verification...")
     gemma_wrapper = GeminiGemmaWrapper(
-        model_name="gemma-3n-e4b-it",  # High-volume Gemma model
+        model_name="gemma-3-27b-it",  # High-volume Gemma model
         temperature=kwargs.get("temperature", 0.0),
         max_retry=kwargs.get("max_retry", 3),
         verbose=False,  # Less verbose for verifiers

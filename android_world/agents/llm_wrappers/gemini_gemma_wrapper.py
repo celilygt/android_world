@@ -89,20 +89,13 @@ GEMINI_MODEL_CONFIGS = {
         "description": "Pro model with lower limits"
     },
     # Gemma models for high-volume verification tasks
-    "gemma-3n-e4b-it": {
+    "gemma-3-27b-it": {
         "rpm_limit": 30,
         "tpm_limit": 15000,
         "rpd_limit": 14400,
         "priority": 10,  # Lower priority for verifiers
         "description": "High-volume Gemma model for verification"
-    },
-    "gemma-3-4b-it": {
-        "rpm_limit": 30,
-        "tpm_limit": 15000,
-        "rpd_limit": 14400,
-        "priority": 11,
-        "description": "High-volume Gemma model for verification"
-    },
+    }
 }
 
 

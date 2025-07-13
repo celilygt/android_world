@@ -85,7 +85,9 @@ eval "$(yq e '.environment | to_entries | .[] | "env_" + .key + "=\"" + .value +
 LOG_DIR="runs"
 mkdir -p "$LOG_DIR"
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-LOG_FILE="$LOG_DIR/${TIMESTAMP}_${active_agent_key}.log"
+RUN_DIR="$LOG_DIR/${TIMESTAMP}_${active_agent_key}"
+mkdir -p "$RUN_DIR"
+LOG_FILE="$RUN_DIR/benchmark_run.log"
 touch "$LOG_FILE"
 
 
@@ -94,7 +96,7 @@ echo -e "${C_YELLOW}🚀 Starting AndroidWorld Benchmark...${C_NC}"
 echo -e "  ${C_BLUE}Agent:${C_NC} $agent_registry_name (from key '$active_agent_key')"
 echo -e "  ${C_BLUE}Run Mode:${C_NC} $run_mode"
 echo -e "  ${C_BLUE}Task:${C_NC} ${task_name:-Default (Random/All)}"
-echo -e "  ${C_BLUE}Log File:${C_NC} $LOG_FILE"
+echo -e "  ${C_BLUE}Log Directory:${C_NC} $RUN_DIR"
 echo "-----------------------------------------------------"
 
 
@@ -148,11 +150,11 @@ start_ollama() {
         echo -e "${C_RED}❌ Ollama is not installed. Please install it from https://ollama.com${C_NC}"
         exit 1
     fi
-    
+
     echo -e "${C_YELLOW}🚀 Starting Ollama server...${C_NC}"
     nohup ollama serve > ollama.log 2>&1 &
     OLLAMA_PID=$!
-    
+
     # Wait for Ollama to start
     for i in {1..30}; do
         if check_ollama; then
@@ -161,7 +163,7 @@ start_ollama() {
         fi
         sleep 1
     done
-    
+
     echo -e "${C_RED}❌ Ollama failed to start within 30 seconds.${C_NC}"
     exit 1
 }
@@ -234,12 +236,12 @@ fi
 build_python_command() {
     local base_cmd
     local common_flags="--agent_name=\"$agent_registry_name\""
-    
+
     # Append all agent-specific flags, excluding registry_name and V-DROID-specific batch parameters
     for var in $(compgen -v agent_); do
-        if [ "$var" != "agent_registry_name" ] && 
-           [ "$var" != "agent_batch_delay_ms" ] && 
-           [ "$var" != "agent_batch_size" ] && 
+        if [ "$var" != "agent_registry_name" ] &&
+           [ "$var" != "agent_batch_delay_ms" ] &&
+           [ "$var" != "agent_batch_size" ] &&
            [ "$var" != "agent_enable_batch_verification" ]; then
             key_name=$(echo "$var" | sed 's/agent_//')
             value=${!var}
@@ -267,6 +269,9 @@ build_python_command() {
     else
         echo -e "${C_RED}❌ Invalid run mode: $run_mode.${C_NC}"; exit 1
     fi
+
+    # Add the new log directory flag
+    common_flags="$common_flags --run_log_dir=\"$RUN_DIR\""
     echo "$base_cmd $common_flags"
 }
 
@@ -286,12 +291,16 @@ trap '
   echo -e "\n${C_RED}🛑 Interrupted. Killing process tree...${C_NC}"
   # Kill the entire process group started by the script
   [ ! -z "$PID" ] && kill -- -"$PID" 2>/dev/null
+  # Create code dump on interrupt
+  echo -e "${C_YELLOW}Creating code state dump...${C_NC}"
+  python create_celil_dump.py > /dev/null 2>&1
+  mv celil_dump.md "$RUN_DIR/celil_dump.md" 2>/dev/null || true
   # Stop Ollama if we started it
   if [[ "$agent_registry_name" == *"ollama"* ]] && [ ! -z "$OLLAMA_PID" ]; then
       echo -e "${C_YELLOW}🛑 Stopping Ollama server...${C_NC}"
       kill $OLLAMA_PID 2>/dev/null || true
   fi
-  echo -e "${C_YELLOW}Logs saved to $LOG_FILE${C_NC}"
+  echo -e "${C_YELLOW}Logs saved to $RUN_DIR${C_NC}"
   exit 130
 ' SIGINT SIGTERM
 
@@ -303,5 +312,54 @@ trap '
   wait $PID
 ) 2>&1 | tee "$LOG_FILE" | grep -v "Raw LLM Response"
 
-echo -e "${C_GREEN}🎉 Benchmark completed! Full output log is at: $LOG_FILE${C_NC}"
-exit 0 
+# Create code dump after successful execution
+echo -e "${C_GREEN}Creating code state dump...${C_NC}"
+python create_celil_dump.py > /dev/null 2>&1
+mv celil_dump.md "$RUN_DIR/celil_dump.md" 2>/dev/null || true
+
+# --- NEW: Combine logs into a single analysis file ---
+COMBINED_LOG_FILE="$RUN_DIR/full_analysis_log.md"
+echo -e "${C_YELLOW}📝 Combining all logs into a single analysis file...${C_NC}"
+
+# Create the file and add a main title
+echo "# Full Analysis Log for Run: ${TIMESTAMP}_${active_agent_key}" > "$COMBINED_LOG_FILE"
+echo "---" >> "$COMBINED_LOG_FILE"
+
+# 1. Add header and content for the main benchmark run log
+echo -e "\n\n## 📜 Main Benchmark Run Log (benchmark_run.log)\n" >> "$COMBINED_LOG_FILE"
+echo '```log' >> "$COMBINED_LOG_FILE"
+if [ -f "$LOG_FILE" ]; then
+    cat "$LOG_FILE" >> "$COMBINED_LOG_FILE"
+else
+    echo "--> benchmark_run.log not found." >> "$COMBINED_LOG_FILE"
+fi
+echo '```' >> "$COMBINED_LOG_FILE"
+
+# 2. Add header and content for LLM interactions
+LLM_LOG_FILE="$RUN_DIR/llm_interactions.log"
+echo -e "\n\n## 🤖 LLM Interaction Log (llm_interactions.log)\n" >> "$COMBINED_LOG_FILE"
+echo '```log' >> "$COMBINED_LOG_FILE"
+if [ -f "$LLM_LOG_FILE" ]; then
+    cat "$LLM_LOG_FILE" >> "$COMBINED_LOG_FILE"
+else
+    echo "--> llm_interactions.log not found." >> "$COMBINED_LOG_FILE"
+fi
+echo '```' >> "$COMBINED_LOG_FILE"
+
+# 3. Add header and content for the Celil code dump
+CELIL_DUMP_FILE="$RUN_DIR/celil_dump.md"
+echo -e "\n\n## 💻 Agent Code State Dump (celil_dump.md)\n" >> "$COMBINED_LOG_FILE"
+if [ -f "$CELIL_DUMP_FILE" ]; then
+    # We can directly append the markdown content here
+    cat "$CELIL_DUMP_FILE" >> "$COMBINED_LOG_FILE"
+else
+    echo '```text' >> "$COMBINED_LOG_FILE"
+    echo "--> celil_dump.md not found." >> "$COMBINED_LOG_FILE"
+    echo '```' >> "$COMBINED_LOG_FILE"
+fi
+
+echo -e "${C_GREEN}✅ Combined log created successfully.${C_NC}"
+
+echo -e "${C_GREEN}🎉 Benchmark completed! Full artifacts are at: ${RUN_DIR}${C_NC}"
+echo -e "📋 For easy sharing, copy the entire content of: ${C_CYAN}${COMBINED_LOG_FILE}${C_NC}"
+exit 0

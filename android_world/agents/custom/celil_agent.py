@@ -147,9 +147,6 @@ class CelilAgent(base_agent.EnvironmentInteractingAgent):
         if not self.working_memory.get_plan():
             agent_logger.info("📋 PLANNING: No plan exists, generating initial plan...")
 
-            # The Maestro planner is already prompted to generate the "open app" step.
-            # Manually detecting and prepending it here caused the duplicate step issue in the logs.
-
             agent_logger.info("🔍 EPISODIC MEMORY: Searching for similar tasks...")
             retrieved_plan = self.episodic_memory.find_similar_task(goal)
             if retrieved_plan:
@@ -157,9 +154,8 @@ class CelilAgent(base_agent.EnvironmentInteractingAgent):
             else:
                 agent_logger.info("📚 EPISODIC MEMORY: No similar tasks found")
 
-            agent_logger.info("👁️ PERCEPTION: Processing current screen observation...")
-            agent_logger.info("   🤖 LLM CALL INCOMING: Qwen VL for visual understanding")
-            observation = self.perception.process_observation(current_state, deep_analysis=True)
+            agent_logger.info("👁️ PERCEPTION: Processing current screen observation (fast mode)...")
+            observation = self.perception.process_observation(current_state, deep_analysis=False)
             agent_logger.info(f"   ✅ PERCEPTION COMPLETE: {len(observation.get('summary', ''))} chars summary")
 
             agent_logger.info("🧠 MAESTRO: Generating initial strategic plan...")
@@ -184,29 +180,22 @@ class CelilAgent(base_agent.EnvironmentInteractingAgent):
         current_phash = imagehash.phash(Image.fromarray(current_state.pixels))
         agent_logger.info(f"🖼️  Screen p-hash: {current_phash}")
 
-        is_first_step_of_plan = len(self.working_memory.data['history']) == 0
-        needs_deep_analysis = not self.speed_mode or is_first_step_of_plan
-
-        if self.speed_mode and self.last_observation_cache and current_phash == self.last_screenshot_phash:
-            agent_logger.info("🧠 PERCEPTION CACHE: Screen unchanged, using cached observation.")
-            observation = self.last_observation_cache
-        else:
-            if needs_deep_analysis:
-                agent_logger.info("👁️  PERCEPTION (DEEP): Screen changed or deep analysis required...")
-                agent_logger.info("   🤖 LLM CALL INCOMING: Qwen VL for visual understanding")
-            else:
-                agent_logger.info("👁️  PERCEPTION (SHALLOW): Screen changed, using OCR/UI Tree only.")
-            observation = self.perception.process_observation(current_state, deep_analysis=needs_deep_analysis)
-            self.last_observation_cache = observation
-            self.last_screenshot_phash = current_phash
+        # The slow Qwen perception call has been removed. We now always perform a fast
+        # OCR/UI tree-based observation, which is still useful for the Maestro planner's context.
+        # The action generator (SectionLeader) will get the raw screenshot.
+        agent_logger.info("👁️  PERCEPTION (SHALLOW): Performing fast OCR/UI Tree analysis.")
+        observation = self.perception.process_observation(current_state, deep_analysis=False)
+        self.last_screenshot_phash = current_phash
 
         context_summary = self.working_memory.get_context_summary()
         agent_logger.info(f"🧠 CONTEXT: Retrieved {len(context_summary)} chars of context summary")
 
-        agent_logger.info("🎯 SECTION LEADER: Generating action with UI-TARS...")
+        agent_logger.info("🎯 SECTION LEADER: Generating action with UI-TARS (with screenshot)...")
         agent_logger.info("   🤖 LLM CALL INCOMING: UI-TARS for action generation")
-        action_dict, confidence = self.section_leader.generate_action(
-            sub_goal, observation["summary"], context_summary
+        action_dict, confidence = self.section_leader.generate_action_with_screenshot(
+            sub_goal,
+            current_state.pixels,  # Pass the raw screenshot for visual analysis
+            context_summary
         )
         agent_logger.info(f"   ✅ SECTION LEADER COMPLETE: Generated action with confidence {confidence:.1f}")
 
@@ -257,9 +246,9 @@ class CelilAgent(base_agent.EnvironmentInteractingAgent):
                 agent_logger.info(f"   📊 OUTCOME: {outcome} (screen_changed = {screen_changed})")
 
                 if screen_changed:
-                    agent_logger.info("   🤖 LLM CALL INCOMING: Qwen VL for post-execution analysis")
+                    # No need for a slow perception call here either.
                     self.last_screenshot_phash = new_phash
-                    self.last_observation_cache = self.perception.process_observation(new_state, deep_analysis=False)
+
 
             except Exception as e:
                 agent_logger.error(f"❌ ACTION EXECUTION FAILED: {e}")
@@ -296,9 +285,13 @@ class CelilAgent(base_agent.EnvironmentInteractingAgent):
             elif self.micro_correction_retries >= 3:
                 agent_logger.error(
                     f"💥 RECOVERY FAILED: Too many retries ({self.micro_correction_retries}). Escalating to Maestro for full re-plan.")
+
+                # Perform a fast observation for the replan context
+                failure_observation = self.perception.process_observation(current_state, deep_analysis=False)
+
                 failure_context = {
                     'goal': goal, 'original_plan': self.working_memory.get_plan(), 'failed_sub_goal': sub_goal,
-                    'failed_action': proposed_action, 'verifier_feedback': reasoning, 'observation': observation,
+                    'failed_action': proposed_action, 'verifier_feedback': reasoning, 'observation': failure_observation,
                 }
                 agent_logger.info("   🤖 LLM CALL INCOMING: Gemini for corrective planning")
                 new_plan = self.maestro.generate_corrective_plan(failure_context)

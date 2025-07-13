@@ -15,6 +15,7 @@
 """Section Leader (action generator) for the Celil agent."""
 
 import logging
+import re
 from android_world.agents import agent_utils
 from android_world.agents.llm_wrappers.ui_tars_wrapper import UITarsWrapper
 
@@ -104,19 +105,15 @@ class UITarsActionGenerator:
             A tuple containing the action dictionary and a confidence score.
         """
         try:
-            # Handle "open app" sub-goals directly
-            if "open the" in sub_goal.lower() and "app" in sub_goal.lower():
-                # Extract app name from sub-goal like "Open the audio recorder app"
-                import re
-                match = re.search(r'open the (.+?) app', sub_goal.lower())
+            # Handle "open app" sub-goals directly.
+            # This heuristic is specifically tuned to the format Maestro uses: "Open the `app name` app".
+            # By requiring backticks, we avoid misinterpreting descriptive sub-goals (like 'swipe up to open the app drawer')
+            # as commands to open a non-existent app, which was causing crashes.
+            if "open the `" in sub_goal.lower() and "` app" in sub_goal.lower():
+                match = re.search(r"open the `(.+?)` app", sub_goal.lower())
                 if match:
                     app_name = match.group(1).strip()
-                    # BUG FIX: Only proceed if the extracted app_name is not empty.
-                    # This prevents the heuristic from incorrectly handling complex sentences
-                    # where the regex might match but extract an empty string, causing errors.
                     if app_name:
-                        # FIX: Add this line to clean the extracted app name
-                        app_name = app_name.strip('`\'"')
                         action = {"action_type": "open_app", "app_name": app_name}
                         print(f"🎯 Direct app opening action: {action}")
                         return action, 9.5  # High confidence for direct match
@@ -169,7 +166,7 @@ class UITarsActionGenerator:
             sub_goal: str,
             screenshot,
             context_summary: str = ""
-    ) -> str:
+    ) -> tuple[dict, float]:
         """Generate action using screenshot input directly.
 
         Args:
@@ -178,7 +175,7 @@ class UITarsActionGenerator:
             context_summary: Summary of recent actions taken
 
         Returns:
-            JSON string representing the action to take
+            A tuple containing the action dictionary and a confidence score.
         """
         try:
             # Prepare prompt for multimodal input
@@ -205,7 +202,7 @@ Respond with ONLY a single valid JSON action object:
 
             if not response:
                 print("⚠️ UI-TARS returned empty response for screenshot input")
-                return self._get_fallback_action()
+                return self._get_fallback_action(), 2.0
 
             # Try to extract and validate JSON from response
             cleaned_action = agent_utils.extract_json(response)
@@ -213,22 +210,22 @@ Respond with ONLY a single valid JSON action object:
             if cleaned_action:
                 print(f"✅ UI-TARS generated action from screenshot: {cleaned_action}")
                 print(f"📊 Generation metadata: {metadata}")
-                return cleaned_action
+                return cleaned_action, 9.0
             else:
                 print(f"⚠️ Could not extract valid JSON from screenshot response: {response[:200]}...")
-                return self._get_fallback_action()
+                return self._get_fallback_action(), 2.0
 
         except Exception as e:
             print(f"❌ Error in UI-TARS screenshot action generation: {e}")
-            return self._get_fallback_action()
+            return self._get_fallback_action(), 2.0
 
-    def _get_fallback_action(self) -> str:
+    def _get_fallback_action(self) -> dict:
         """Get a safe fallback action when UI-TARS fails.
 
         Returns:
-            JSON string for a safe wait action
+            A dictionary for a safe wait action.
         """
-        fallback = '{"action_type": "wait", "time": 1.0}'
+        fallback = {"action_type": "wait", "time": 1.0}
         print(f"🔄 Using fallback action: {fallback}")
         return fallback
 

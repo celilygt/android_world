@@ -60,10 +60,10 @@ Here is a list of available applications and their common uses:
 
 1.  Analyze the user's goal: "{goal}"
 2.  From the list above, select the single best app to accomplish the goal.
-3.  Your first step in the generated plan must be `Open the {{app_name}} app`.
+3.  Your first step in the generated plan must be `Open the `{{app_name}}` app`. Use backticks around the app name.
 4.  If no specific app seems appropriate, you may omit the "open app" step, but this should be rare.
 5.  After the "open app" step, create a sequence of logical, high-level steps to achieve the user's goal within that app.
-6.  Be aware that after opening an app, there might be welcome screens, permission requests, or "Get Started" buttons. Include a general step to handle these initial interactions if necessary.
+6.  **Crucially**, after the "open app" step, add a step like "Click the 'Get Started' button" or "Handle any initial pop-ups". This is vital for navigating new apps. Do not skip this step.
 
 Current Screen Analysis:
 Text visible: {ocr_summary}

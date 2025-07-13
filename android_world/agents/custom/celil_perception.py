@@ -48,70 +48,42 @@ class PerceptionModule:
 
   def _get_enhanced_visual_analysis(self, screenshot) -> list[dict]:
     """Use multimodal LLM to get enhanced visual analysis of the screen."""
-    if not self.llm_wrapper:
-      return []
-    
-    try:
-      response, _, _ = self.llm_wrapper.predict_mm(VISUAL_ANALYSIS_PROMPT, [screenshot])
-      
-      # Try to parse JSON response
-      try:
-        if response.strip().startswith('[') and response.strip().endswith(']'):
-          elements = json.loads(response)
-        else:
-          # Look for JSON array in response
-          import re
-          json_match = re.search(r'\[.*\]', response, re.DOTALL)
-          if json_match:
-            elements = json.loads(json_match.group())
-          else:
-            return []
-        
-        # Validate and filter the elements
-        valid_elements = []
-        for element in elements:
-          if isinstance(element, dict) and 'type' in element:
-            valid_elements.append(element)
-        
-        return valid_elements[:10]  # Limit to 10 elements to avoid bloat
-      except json.JSONDecodeError:
-        return []
-    except Exception:
-      return []
+    # This is the slow part. We disable it to improve performance and rely
+    # on the action generator's multimodality instead.
+    return []
 
   def process_observation(self, state: interface.State, deep_analysis: bool = False) -> dict:
     """Processes a raw state from the environment.
 
     Args:
       state: The raw state from the environment.
-      deep_analysis: Whether to perform a deep, LLM-powered analysis.
+      deep_analysis: THIS IS NOW IGNORED. Deep analysis is disabled for speed.
+        The action generator now receives the raw screenshot directly.
 
     Returns:
       A dictionary containing the structured observation.
     """
     screenshot = state.pixels
-    
-    # Get enhanced visual analysis if LLM wrapper is available and deep analysis is requested
-    if deep_analysis:
-        enhanced_elements = self._get_enhanced_visual_analysis(screenshot)
-    else:
-        enhanced_elements = []
-    
+
+    # We have disabled the slow deep analysis by modifying _get_enhanced_visual_analysis.
+    # This call is now fast and will always return [].
+    enhanced_elements = self._get_enhanced_visual_analysis(screenshot)
+
     try:
       ocr_data = pytesseract.image_to_data(
-          Image.fromarray(screenshot), output_type=pytesseract.Output.DICT
+        Image.fromarray(screenshot), output_type=pytesseract.Output.DICT
       )
     except pytesseract.TesseractNotFoundError:
       # Handle case where Tesseract is not installed or not in PATH
       # You might want to log a warning or raise an exception
       # For now, we'll return empty OCR results
       ocr_data = {
-          'text': [],
-          'left': [],
-          'top': [],
-          'width': [],
-          'height': [],
-          'conf': [],
+        'text': [],
+        'left': [],
+        'top': [],
+        'width': [],
+        'height': [],
+        'conf': [],
       }
 
     ocr_results = []
@@ -124,39 +96,39 @@ class PerceptionModule:
           width = ocr_data['width'][i]
           height = ocr_data['height'][i]
           ocr_results.append({
-              'text': text,
-              'bbox': (left, top, width, height),
+            'text': text,
+            'bbox': (left, top, width, height),
           })
 
     # Create a concise summary for the LLM
     visible_text = [result['text'] for result in ocr_results]
     ui_elements_summary = []
-    
+
     if hasattr(state, 'ui_elements') and state.ui_elements:
       for element in state.ui_elements[:10]:  # Limit to first 10 elements to avoid token bloat
         if hasattr(element, 'text') and element.text and element.text.strip():
           ui_elements_summary.append(f"'{element.text.strip()}'")
         elif hasattr(element, 'content_description') and element.content_description:
           ui_elements_summary.append(f"[{element.content_description}]")
-    
+
     # Combine OCR, enhanced analysis, and UI elements for summary
     summary_parts = []
     if enhanced_elements:
       enhanced_text = [elem.get('text', elem.get('description', '')) for elem in enhanced_elements if elem.get('text') or elem.get('description')]
       if enhanced_text:
         summary_parts.append(f"AI-detected elements: {', '.join(enhanced_text[:10])}")
-    
+
     if visible_text:
       summary_parts.append(f"OCR text: {', '.join(visible_text[:15])}")  # Limit text to avoid token bloat
     if ui_elements_summary:
       summary_parts.append(f"System UI elements: {', '.join(ui_elements_summary)}")
-    
+
     summary = "; ".join(summary_parts) if summary_parts else "No significant UI content detected"
 
     return {
-        'screenshot': screenshot,
-        'ocr_results': ocr_results,
-        'enhanced_elements': enhanced_elements,  # New: AI-powered visual analysis
-        'ui_tree': state.ui_elements,
-        'summary': summary,
+      'screenshot': screenshot,
+      'ocr_results': ocr_results,
+      'enhanced_elements': enhanced_elements,  # New: AI-powered visual analysis
+      'ui_tree': state.ui_elements,
+      'summary': summary,
     }

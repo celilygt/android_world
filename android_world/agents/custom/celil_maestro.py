@@ -63,6 +63,7 @@ Here is a list of available applications and their common uses:
 3.  Your first step in the generated plan must be `Open the {{app_name}} app`.
 4.  If no specific app seems appropriate, you may omit the "open app" step, but this should be rare.
 5.  After the "open app" step, create a sequence of logical, high-level steps to achieve the user's goal within that app.
+6.  Be aware that after opening an app, there might be welcome screens, permission requests, or "Get Started" buttons. Include a general step to handle these initial interactions if necessary.
 
 Current Screen Analysis:
 Text visible: {ocr_summary}
@@ -104,14 +105,14 @@ class MaestroPlanner:
     """Creates a concise summary of the UI tree."""
     if not ui_tree:
       return "No UI elements detected"
-    
+
     summary_items = []
     element_count = 0
-    
+
     for element in ui_tree:
       if element_count >= 20:  # Limit to 20 elements max
         break
-        
+
       try:
         # Get clickable elements with text or content description
         if hasattr(element, 'clickable') and element.clickable:
@@ -127,11 +128,11 @@ class MaestroPlanner:
           element_count += 1
       except Exception:
         continue  # Skip problematic elements
-    
+
     return "; ".join(summary_items[:15]) if summary_items else "No interactive elements"
 
   def generate_initial_plan(
-      self, goal: str, observation: dict, retrieved_plan: list[str] | None
+          self, goal: str, observation: dict, retrieved_plan: list[str] | None
   ) -> list[str]:
     """Generates an initial plan using both screenshot and text analysis."""
     ocr_summary = self._create_ocr_summary(observation['ocr_results'])
@@ -139,18 +140,18 @@ class MaestroPlanner:
 
     if retrieved_plan:
       retrieved_plan_section = (
-          "Similar task plan:\n" + "\n".join(retrieved_plan[:5])  # Limit to 5 steps
+              "Similar task plan:\n" + "\n".join(retrieved_plan[:5])  # Limit to 5 steps
       )
     else:
       retrieved_plan_section = ""
 
     prompt = PLANNER_PROMPT_TEMPLATE.format(
-        goal=goal,
-        ocr_summary=ocr_summary,
-        ui_summary=ui_summary,
-        retrieved_plan_section=retrieved_plan_section,
+      goal=goal,
+      ocr_summary=ocr_summary,
+      ui_summary=ui_summary,
+      retrieved_plan_section=retrieved_plan_section,
     )
-    
+
     # Use multimodal prediction with screenshot for better understanding (NOW FREE!)
     response, _, _ = self.llm_wrapper.predict_mm(prompt, [observation['screenshot']])
     return self._parse_plan(response)
@@ -158,10 +159,10 @@ class MaestroPlanner:
   def generate_corrective_plan(self, failure_context: dict) -> list[str]:
     """Generates a corrective plan using screenshot analysis."""
     ocr_summary = self._create_ocr_summary(
-        failure_context['observation']['ocr_results']
+      failure_context['observation']['ocr_results']
     )
     ui_summary = self._create_ui_tree_summary(
-        failure_context['observation']['ui_tree']
+      failure_context['observation']['ui_tree']
     )
 
     # Ensure verifier_feedback is a string before slicing
@@ -172,14 +173,14 @@ class MaestroPlanner:
     verifier_feedback_str = str(verifier_feedback)[:300]  # Truncate long feedback
 
     prompt = CORRECTIVE_PROMPT_TEMPLATE.format(
-        goal=failure_context['goal'],
-        failed_sub_goal=failure_context['failed_sub_goal'],
-        failed_action=str(failure_context['failed_action'])[:200],  # Truncate long actions
-        verifier_feedback=verifier_feedback_str,
-        ocr_summary=ocr_summary,
-        ui_summary=ui_summary,
+      goal=failure_context['goal'],
+      failed_sub_goal=failure_context['failed_sub_goal'],
+      failed_action=str(failure_context['failed_action'])[:200],  # Truncate long actions
+      verifier_feedback=verifier_feedback_str,
+      ocr_summary=ocr_summary,
+      ui_summary=ui_summary,
     )
-    
+
     # Use multimodal prediction with screenshot for better error recovery (NOW FREE!)
     response, _, _ = self.llm_wrapper.predict_mm(prompt, [failure_context['observation']['screenshot']])
     return self._parse_plan(response)

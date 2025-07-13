@@ -111,11 +111,15 @@ class UITarsActionGenerator:
                 match = re.search(r'open the (.+?) app', sub_goal.lower())
                 if match:
                     app_name = match.group(1).strip()
-                    # FIX: Add this line to clean the extracted app name
-                    app_name = app_name.strip('`\'"')
-                    action = {"action_type": "open_app", "app_name": app_name}
-                    print(f"🎯 Direct app opening action: {action}")
-                    return action, 9.5  # High confidence for direct match
+                    # BUG FIX: Only proceed if the extracted app_name is not empty.
+                    # This prevents the heuristic from incorrectly handling complex sentences
+                    # where the regex might match but extract an empty string, causing errors.
+                    if app_name:
+                        # FIX: Add this line to clean the extracted app name
+                        app_name = app_name.strip('`\'"')
+                        action = {"action_type": "open_app", "app_name": app_name}
+                        print(f"🎯 Direct app opening action: {action}")
+                        return action, 9.5  # High confidence for direct match
 
             # Prepare the prompt
             prompt = UI_TARS_PROMPT_TEMPLATE.format(

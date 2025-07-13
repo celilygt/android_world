@@ -281,11 +281,72 @@ echo "$PYTHON_CMD"
 echo "-----------------------------------------------------"
 
 
+# --- NEW: Function to combine all logs ---
+# This is now a function so it can be called from both the main exit path and the trap.
+combine_logs() {
+    local COMBINED_LOG_FILE="$RUN_DIR/full_analysis_log.md"
+    echo -e "${C_YELLOW}📝 Assembling the final analysis file for debugging...${C_NC}"
+
+    # Define the introductory prompt provided by the user
+    local INTRO_PROMPT="We are developing an android agent to control a mobile application, for the benchmark android_world. If this file is sent to you, this means there has been something wrong in the execution, either the agent couldn't finish the task, or had a runtime error. You will find the source code of the related files, run logs of the agent, and also the LLM interactions. Finally, you will also find the screenshots of the steps of the agent. Debug the error/mistake and lay it out clearly, then propose solutions. The proposed solutions should be in the format of full file changes, to accomodate direct copy and paste from this chat to the IDE"
+
+    # 1. Start the file with the introductory prompt
+    echo "$INTRO_PROMPT" > "$COMBINED_LOG_FILE"
+    echo "" >> "$COMBINED_LOG_FILE"
+
+    # 2. Add the list of screenshots
+    local SCREENSHOT_DIR="$RUN_DIR/screenshots"
+    echo -e "\n\n## 📸 Screenshots Taken\n" >> "$COMBINED_LOG_FILE"
+    echo 'The following screenshots were saved during the run. The names correspond to the step number.' >> "$COMBINED_LOG_FILE"
+    echo '```text' >> "$COMBINED_LOG_FILE"
+    if [ -d "$SCREENSHOT_DIR" ]; then
+        if [ -z "$(ls -A $SCREENSHOT_DIR 2>/dev/null)" ]; then
+           echo "No screenshots were saved in the directory." >> "$COMBINED_LOG_FILE"
+        else
+           ls -1 "$SCREENSHOT_DIR" >> "$COMBINED_LOG_FILE"
+        fi
+    else
+        echo "No screenshot directory was found." >> "$COMBINED_LOG_FILE"
+    fi
+    echo '```' >> "$COMBINED_LOG_FILE"
+
+    # 3. Add the Celil code dump
+    local CELIL_DUMP_FILE="$RUN_DIR/celil_dump.md"
+    echo -e "\n\n## 💻 Agent Code State Dump (celil_dump.md)\n" >> "$COMBINED_LOG_FILE"
+    if [ -f "$CELIL_DUMP_FILE" ]; then
+        cat "$CELIL_DUMP_FILE" >> "$COMBINED_LOG_FILE"
+    else
+        echo '```text' >> "$COMBINED_LOG_FILE"
+        echo "--> celil_dump.md not found." >> "$COMBINED_log_FILE"
+        echo '```' >> "$COMBINED_LOG_FILE"
+    fi
+
+    # 4. Add the main benchmark run log
+    echo -e "\n\n## 📜 Main Benchmark Run Log (benchmark_run.log)\n" >> "$COMBINED_LOG_FILE"
+    echo '```log' >> "$COMBINED_LOG_FILE"
+    if [ -f "$LOG_FILE" ]; then
+        cat "$LOG_FILE" >> "$COMBINED_LOG_FILE"
+    else
+        echo "--> benchmark_run.log not found." >> "$COMBINED_LOG_FILE"
+    fi
+    echo '```' >> "$COMBINED_LOG_FILE"
+
+    # 5. Add the LLM interaction log
+    local LLM_LOG_FILE="$RUN_DIR/llm_interactions.log"
+    echo -e "\n\n## 🤖 LLM Interaction Log (llm_interactions.log)\n" >> "$COMBINED_LOG_FILE"
+    echo '```log' >> "$COMBINED_LOG_FILE"
+    if [ -f "$LLM_LOG_FILE" ]; then
+        cat "$LLM_LOG_FILE" >> "$COMBINED_LOG_FILE"
+    else
+        echo "--> llm_interactions.log not found." >> "$COMBINED_LOG_FILE"
+    fi
+    echo '```' >> "$COMBINED_LOG_FILE"
+
+    echo -e "${C_GREEN}✅ Combined analysis file created successfully: ${C_CYAN}${COMBINED_LOG_FILE}${C_NC}"
+}
+
+
 # --- Execution & Cleanup ---
-# We use a subshell and a background process to manage the PID
-# for graceful shutdown on Ctrl+C.
-# The output is piped to `tee` to save to the log file and then filtered
-# with `grep` to hide raw LLM responses from the terminal.
 PID=
 trap '
   echo -e "\n${C_RED}🛑 Interrupted. Killing process tree...${C_NC}"
@@ -300,7 +361,9 @@ trap '
       echo -e "${C_YELLOW}🛑 Stopping Ollama server...${C_NC}"
       kill $OLLAMA_PID 2>/dev/null || true
   fi
-  echo -e "${C_YELLOW}Logs saved to $RUN_DIR${C_NC}"
+  # --- Combine logs on interrupt ---
+  combine_logs
+  echo -e "${C_YELLOW}Artifacts and combined log saved to $RUN_DIR${C_NC}"
   exit 130
 ' SIGINT SIGTERM
 
@@ -317,49 +380,8 @@ echo -e "${C_GREEN}Creating code state dump...${C_NC}"
 python create_celil_dump.py > /dev/null 2>&1
 mv celil_dump.md "$RUN_DIR/celil_dump.md" 2>/dev/null || true
 
-# --- NEW: Combine logs into a single analysis file ---
-COMBINED_LOG_FILE="$RUN_DIR/full_analysis_log.md"
-echo -e "${C_YELLOW}📝 Combining all logs into a single analysis file...${C_NC}"
+# Combine logs after successful execution
+combine_logs
 
-# Create the file and add a main title
-echo "# Full Analysis Log for Run: ${TIMESTAMP}_${active_agent_key}" > "$COMBINED_LOG_FILE"
-echo "---" >> "$COMBINED_LOG_FILE"
-
-# 1. Add header and content for the main benchmark run log
-echo -e "\n\n## 📜 Main Benchmark Run Log (benchmark_run.log)\n" >> "$COMBINED_LOG_FILE"
-echo '```log' >> "$COMBINED_LOG_FILE"
-if [ -f "$LOG_FILE" ]; then
-    cat "$LOG_FILE" >> "$COMBINED_LOG_FILE"
-else
-    echo "--> benchmark_run.log not found." >> "$COMBINED_LOG_FILE"
-fi
-echo '```' >> "$COMBINED_LOG_FILE"
-
-# 2. Add header and content for LLM interactions
-LLM_LOG_FILE="$RUN_DIR/llm_interactions.log"
-echo -e "\n\n## 🤖 LLM Interaction Log (llm_interactions.log)\n" >> "$COMBINED_LOG_FILE"
-echo '```log' >> "$COMBINED_LOG_FILE"
-if [ -f "$LLM_LOG_FILE" ]; then
-    cat "$LLM_LOG_FILE" >> "$COMBINED_LOG_FILE"
-else
-    echo "--> llm_interactions.log not found." >> "$COMBINED_LOG_FILE"
-fi
-echo '```' >> "$COMBINED_LOG_FILE"
-
-# 3. Add header and content for the Celil code dump
-CELIL_DUMP_FILE="$RUN_DIR/celil_dump.md"
-echo -e "\n\n## 💻 Agent Code State Dump (celil_dump.md)\n" >> "$COMBINED_LOG_FILE"
-if [ -f "$CELIL_DUMP_FILE" ]; then
-    # We can directly append the markdown content here
-    cat "$CELIL_DUMP_FILE" >> "$COMBINED_LOG_FILE"
-else
-    echo '```text' >> "$COMBINED_LOG_FILE"
-    echo "--> celil_dump.md not found." >> "$COMBINED_LOG_FILE"
-    echo '```' >> "$COMBINED_LOG_FILE"
-fi
-
-echo -e "${C_GREEN}✅ Combined log created successfully.${C_NC}"
-
-echo -e "${C_GREEN}🎉 Benchmark completed! Full artifacts are at: ${RUN_DIR}${C_NC}"
-echo -e "📋 For easy sharing, copy the entire content of: ${C_CYAN}${COMBINED_LOG_FILE}${C_NC}"
+echo -e "${C_GREEN}🎉 Benchmark completed!${C_NC}"
 exit 0

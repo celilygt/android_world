@@ -23,6 +23,49 @@ from android_world.env import interface
 from android_world.env import json_action
 from android_world.env import representation_utils
 
+# MODIFICATION: Added a detailed list of openable applications to the prompt.
+# This provides the agent with explicit knowledge of which apps can be opened directly.
+# The 'app_name' values are chosen to be compatible with `adb_utils.launch_app`.
+APP_LIST_GUIDANCE = (
+    '- Open an app (nothing will happen if the app is not'
+    ' installed): `{{\"action_type\": \"open_app\", \"app_name\": <name>}}`\n'
+    '  You have the ability to directly open the following applications. If the'
+    ' task description suggests using one of these apps, you should use this'
+    ' action as your first step. Use the exact "app_name" from this list.\n'
+    '  * google chrome: For browsing websites. (app_name: "chrome")\n'
+    '  * google chat: For messaging and collaboration. (app_name: "google chat")\n'
+    '  * settings: For changing device settings. (app_name: "settings")\n'
+    '  * youtube: For watching videos. (app_name: "youtube")\n'
+    '  * google play: For downloading apps and games. (app_name: "google play")\n'
+    '  * gmail: For sending and receiving emails. (app_name: "gmail")\n'
+    '  * google maps: For navigation and finding locations. (app_name: "google maps")\n'
+    '  * google photos: For viewing and managing photos. (app_name: "google photos")\n'
+    '  * google calendar: For managing schedules and events. (app_name: "google calendar")\n'
+    '  * camera: For taking photos and videos. (app_name: "camera")\n'
+    '  * audio recorder: For recording audio. (app_name: "audio recorder")\n'
+    '  * google drive: For storing and sharing files. (app_name: "google drive")\n'
+    '  * google keep: For taking notes and creating lists. (app_name: "google keep")\n'
+    '  * clock: For setting alarms and timers. (app_name: "clock")\n'
+    '  * contacts: For managing contacts. (app_name: "contacts")\n'
+    '  * files: For managing files and folders. (app_name: "files")\n'
+    '  * markor: For writing and editing notes in Markdown format. (app_name: "markor")\n'
+    '  * clipper: For managing the clipboard. (app_name: "clipper")\n'
+    '  * messages: For sending and receiving SMS and MMS messages. (app_name: "messages")\n'
+    '  * dialer: For making phone calls. (app_name: "dialer")\n'
+    '  * simple calendar pro: For managing schedules, events, and appointments. (app_name: "simple calendar pro")\n'
+    '  * simple gallery pro: For viewing and managing photos and videos. (app_name: "simple gallery pro")\n'
+    '  * miniwob: A specialized app for web-based tasks. (app_name: "miniwob")\n'
+    '  * simple draw pro: For drawing and sketching. (app_name: "simple draw pro")\n'
+    '  * pro expense: For tracking expenses. (app_name: "pro expense")\n'
+    '  * broccoli app: A recipe application. (app_name: "broccoli")\n'
+    '  * osmand: For maps and navigation. (app_name: "osmand")\n'
+    '  * tasks: For managing to-do lists. (app_name: "tasks")\n'
+    '  * open tracks sports tracker: For tracking sports activities. (app_name: "open tracks")\n'
+    '  * joplin: For taking notes and creating to-do lists. (app_name: "joplin")\n'
+    '  * vlc: For playing video files. (app_name: "vlc")\n'
+    '  * retro music: For listening to music. (app_name: "retro music")\n'
+)
+
 PROMPT_PREFIX = (
     'You are an agent who can operate an Android phone on behalf of a user.'
     ' Based on user\'s goal/request, you may\n'

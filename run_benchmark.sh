@@ -1,14 +1,14 @@
 #!/bin/bash
 
-# AndroidWorld Benchmark Runner Script v3
+# AndroidWorld Benchmark Runner Script v3.1
 # This script orchestrates benchmark runs using a central YAML configuration.
 # It handles environment setup, agent configuration, and execution, with
 # improved logging, graceful shutdown, and conditional output visibility.
 #
-# Usage:
-#   ./run_benchmark.sh
-#   ./run_benchmark.sh --config=my_config.yaml
-#   ./run_benchmark.sh --override_agent=m3a_gemini
+# Revision Notes (v3.1):
+# - Generalized code dump logic for both celil_agent and cool_agent.
+# - Fixed name discrepancies causing empty analysis logs for cool_agent.
+# - Made dump file handling dynamic and extensible for future agents.
 
 set -e # Exit on any error
 
@@ -81,11 +81,28 @@ eval "$(yq e "$YQ_AGENT_PATH | to_entries | .[] | \"agent_\" + .key + \"=\\\"\" 
 eval "$(yq e '.task | to_entries | .[] | "task_" + .key + "=\"" + .value + "\""' "$CONFIG_FILE")"
 eval "$(yq e '.environment | to_entries | .[] | "env_" + .key + "=\"" + .value + "\""' "$CONFIG_FILE")"
 
+# --- Setup Agent-Specific Logic (e.g., Code Dumps) ---
+DUMP_SCRIPT_NAME=""
+DUMP_FILE_NAME=""
+
+if [[ "$active_agent_key" == "celil_agent" ]]; then
+    DUMP_SCRIPT_NAME="create_celil_dump.py"
+    DUMP_FILE_NAME="celil_dump.md"
+elif [[ "$active_agent_key" == "cool_agent" ]]; then
+    DUMP_SCRIPT_NAME="create_cool_agent_dump.py"
+    DUMP_FILE_NAME="cool_agent_dump.md"
+else
+    echo -e "${C_YELLOW}⚠️ No specific code dump script configured for agent '$active_agent_key'.${C_NC}"
+fi
+
+
 # --- Setup Output Logging ---
 LOG_DIR="runs"
 mkdir -p "$LOG_DIR"
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-LOG_FILE="$LOG_DIR/${TIMESTAMP}_${active_agent_key}.log"
+RUN_DIR="$LOG_DIR/${TIMESTAMP}_${active_agent_key}"
+mkdir -p "$RUN_DIR"
+LOG_FILE="$RUN_DIR/benchmark_run.log"
 touch "$LOG_FILE"
 
 
@@ -94,7 +111,7 @@ echo -e "${C_YELLOW}🚀 Starting AndroidWorld Benchmark...${C_NC}"
 echo -e "  ${C_BLUE}Agent:${C_NC} $agent_registry_name (from key '$active_agent_key')"
 echo -e "  ${C_BLUE}Run Mode:${C_NC} $run_mode"
 echo -e "  ${C_BLUE}Task:${C_NC} ${task_name:-Default (Random/All)}"
-echo -e "  ${C_BLUE}Log File:${C_NC} $LOG_FILE"
+echo -e "  ${C_BLUE}Log Directory:${C_NC} $RUN_DIR"
 echo "-----------------------------------------------------"
 
 
@@ -106,6 +123,9 @@ check_api_keys() {
     elif [[ "$agent_registry_name" == *"gemini"* ]] && [ -z "$GEMINI_API_KEY" ]; then
         echo -e "${C_RED}❌ GEMINI_API_KEY is not set for agent '$agent_registry_name'.${C_NC}"
         exit 1
+    elif [[ "$agent_registry_name" == *"ollama"* ]]; then
+        echo -e "${C_GREEN}✅ Using Ollama (local inference, no API key required).${C_NC}"
+        return 0
     fi
     echo -e "${C_GREEN}✅ API key for $agent_registry_name found.${C_NC}"
 }
@@ -127,8 +147,55 @@ export GRPC_VERBOSITY=FATAL # Suppress noisy gRPC logs from emulator communicati
 
 if [ "$activate_conda" = "true" ]; then
     echo -e "${C_YELLOW}🔧 Activating conda environment: $conda_env_name...${C_NC}"
-    source /opt/anaconda3/etc/profile.d/conda.sh
+    # Adding more robust conda initialization
+    if [ -f "$(conda info --base)/etc/profile.d/conda.sh" ]; then
+        source "$(conda info --base)/etc/profile.d/conda.sh"
+    else
+        echo -e "${C_RED}❌ Could not find conda.sh. Please check your conda installation.${C_NC}"
+        exit 1
+    fi
     conda activate "$conda_env_name"
+fi
+
+# --- Ollama Management Functions ---
+check_ollama() {
+    if command -v ollama >/dev/null 2>&1; then
+        curl -s http://localhost:11434/api/tags >/dev/null 2>&1
+    else
+        return 1
+    fi
+}
+
+start_ollama() {
+    if ! command -v ollama >/dev/null 2>&1; then
+        echo -e "${C_RED}❌ Ollama is not installed. Please install it from https://ollama.com${C_NC}"
+        exit 1
+    fi
+
+    echo -e "${C_YELLOW}🚀 Starting Ollama server...${C_NC}"
+    nohup ollama serve > ollama.log 2>&1 &
+    OLLAMA_PID=$!
+
+    # Wait for Ollama to start
+    for i in {1..30}; do
+        if check_ollama; then
+            echo -e "${C_GREEN}✅ Ollama server is ready.${C_NC}"
+            return 0
+        fi
+        sleep 1
+    done
+
+    echo -e "${C_RED}❌ Ollama failed to start within 30 seconds.${C_NC}"
+    exit 1
+}
+
+# Handle Ollama for Ollama-based agents
+if [[ "$agent_registry_name" == *"ollama"* ]]; then
+    if ! check_ollama; then
+        start_ollama
+    else
+        echo -e "${C_GREEN}✅ Ollama server is already running.${C_NC}"
+    fi
 fi
 
 check_emulator() { adb devices 2>/dev/null | grep -q "emulator"; }
@@ -190,8 +257,8 @@ fi
 build_python_command() {
     local base_cmd
     local common_flags="--agent_name=\"$agent_registry_name\""
-    
-    # Append all agent-specific flags, excluding registry_name
+
+    # Append all agent-specific flags
     for var in $(compgen -v agent_); do
         if [ "$var" != "agent_registry_name" ]; then
             key_name=$(echo "$var" | sed 's/agent_//')
@@ -200,7 +267,7 @@ build_python_command() {
         fi
     done
 
-    # Append all environment-specific flags, excluding variables used only by this script.
+    # Append all environment-specific flags
     for var in $(compgen -v env_); do
         key_name=$(echo "$var" | sed 's/env_//')
         if [[ "$key_name" != "android_sdk_root" && "$key_name" != "emulator_log_path" ]]; then
@@ -220,6 +287,9 @@ build_python_command() {
     else
         echo -e "${C_RED}❌ Invalid run mode: $run_mode.${C_NC}"; exit 1
     fi
+
+    # Add the run log directory flag
+    common_flags="$common_flags --run_log_dir=\"$RUN_DIR\""
     echo "$base_cmd $common_flags"
 }
 
@@ -229,17 +299,81 @@ echo "$PYTHON_CMD"
 echo "-----------------------------------------------------"
 
 
+# --- Function to create code dump ---
+create_code_dump() {
+    if [ -n "$DUMP_SCRIPT_NAME" ]; then
+        echo -e "${C_YELLOW}Creating code state dump for $active_agent_key...${C_NC}"
+        python "$DUMP_SCRIPT_NAME" > /dev/null 2>&1
+        # Move the generated dump file to the run-specific directory
+        if [ -f "$DUMP_FILE_NAME" ]; then
+            mv "$DUMP_FILE_NAME" "$RUN_DIR/$DUMP_FILE_NAME"
+        else
+            echo -e "${C_RED}Warning: Dump script '$DUMP_SCRIPT_NAME' did not produce '$DUMP_FILE_NAME'.${C_NC}"
+        fi
+    fi
+}
+
+# --- Function to combine all logs ---
+combine_logs() {
+    local COMBINED_LOG_FILE="$RUN_DIR/full_analysis_log.md"
+    echo -e "${C_YELLOW}📝 Assembling the final analysis file for debugging...${C_NC}"
+
+    local INTRO_PROMPT="We are developing an android agent to control a mobile application, for the benchmark android_world. If this file is sent to you, this means there has been something wrong in the execution, either the agent couldn't finish the task, or had a runtime error. You will find the source code of the related files, run logs of the agent, and also the LLM interactions. Finally, you will also find the screenshots of the steps of the agent. Debug the error/mistake and lay it out clearly, then propose solutions. The proposed solutions should be in the format of full file changes, to accomodate direct copy and paste from this chat to the IDE"
+
+    echo "$INTRO_PROMPT" > "$COMBINED_LOG_FILE"
+    echo "" >> "$COMBINED_LOG_FILE"
+
+    local SCREENSHOT_DIR="$RUN_DIR/screenshots"
+    echo -e "\n\n## 📸 Screenshots Taken\n" >> "$COMBINED_LOG_FILE"
+    echo 'The following screenshots were saved during the run. The names correspond to the step number.' >> "$COMBINED_LOG_FILE"
+    echo '```text' >> "$COMBINED_LOG_FILE"
+    if [ -d "$SCREENSHOT_DIR" ] && [ -n "$(ls -A "$SCREENSHOT_DIR" 2>/dev/null)" ]; then
+        ls -1 "$SCREENSHOT_DIR" >> "$COMBINED_LOG_FILE"
+    else
+        echo "No screenshots were found or the directory is empty." >> "$COMBINED_LOG_FILE"
+    fi
+    echo '```' >> "$COMBINED_LOG_FILE"
+
+    # Add the Agent-specific code dump (if configured)
+    if [ -n "$DUMP_FILE_NAME" ]; then
+        local AGENT_DUMP_FILE="$RUN_DIR/$DUMP_FILE_NAME"
+        echo -e "\n\n## 💻 Agent Code State Dump ($DUMP_FILE_NAME)\n" >> "$COMBINED_LOG_FILE"
+        if [ -f "$AGENT_DUMP_FILE" ]; then
+            cat "$AGENT_DUMP_FILE" >> "$COMBINED_LOG_FILE"
+        else
+            echo '```text' >> "$COMBINED_LOG_FILE"
+            echo "--> $DUMP_FILE_NAME not found in $RUN_DIR." >> "$COMBINED_LOG_FILE"
+            echo '```' >> "$COMBINED_LOG_FILE"
+        fi
+    fi
+
+    echo -e "\n\n## 📜 Main Benchmark Run Log (benchmark_run.log)\n" >> "$COMBINED_LOG_FILE"
+    echo '```log' >> "$COMBINED_LOG_FILE"
+    [ -f "$LOG_FILE" ] && cat "$LOG_FILE" >> "$COMBINED_LOG_FILE" || echo "--> benchmark_run.log not found." >> "$COMBINED_LOG_FILE"
+    echo '```' >> "$COMBINED_LOG_FILE"
+
+    local LLM_LOG_FILE="$RUN_DIR/llm_interactions.log"
+    echo -e "\n\n## 🤖 LLM Interaction Log (llm_interactions.log)\n" >> "$COMBINED_LOG_FILE"
+    echo '```log' >> "$COMBINED_LOG_FILE"
+    [ -f "$LLM_LOG_FILE" ] && cat "$LLM_LOG_FILE" >> "$COMBINED_LOG_FILE" || echo "--> llm_interactions.log not found." >> "$COMBINED_LOG_FILE"
+    echo '```' >> "$COMBINED_LOG_FILE"
+
+    echo -e "${C_GREEN}✅ Combined analysis file created successfully: ${C_CYAN}${COMBINED_LOG_FILE}${C_NC}"
+}
+
+
 # --- Execution & Cleanup ---
-# We use a subshell and a background process to manage the PID
-# for graceful shutdown on Ctrl+C.
-# The output is piped to `tee` to save to the log file and then filtered
-# with `grep` to hide raw LLM responses from the terminal.
 PID=
 trap '
   echo -e "\n${C_RED}🛑 Interrupted. Killing process tree...${C_NC}"
-  # Kill the entire process group started by the script
   [ ! -z "$PID" ] && kill -- -"$PID" 2>/dev/null
-  echo -e "${C_YELLOW}Logs saved to $LOG_FILE${C_NC}"
+  create_code_dump
+  if [[ "$agent_registry_name" == *"ollama"* ]] && [ ! -z "$OLLAMA_PID" ]; then
+      echo -e "${C_YELLOW}🛑 Stopping Ollama server...${C_NC}"
+      kill $OLLAMA_PID 2>/dev/null || true
+  fi
+  combine_logs
+  echo -e "${C_YELLOW}Artifacts and combined log saved to $RUN_DIR${C_NC}"
   exit 130
 ' SIGINT SIGTERM
 
@@ -251,5 +385,9 @@ trap '
   wait $PID
 ) 2>&1 | tee "$LOG_FILE" | grep -v "Raw LLM Response"
 
-echo -e "${C_GREEN}🎉 Benchmark completed! Full output log is at: $LOG_FILE${C_NC}"
-exit 0 
+# Create code dump and combine logs after successful execution
+create_code_dump
+combine_logs
+
+echo -e "${C_GREEN}🎉 Benchmark completed!${C_NC}"
+exit 0

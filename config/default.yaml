@@ -26,7 +26,7 @@ script:
 # =============================================================================
 run:
   # "fast" for a single test run, "full" for the complete benchmark suite.
-  mode: "fast"
+  mode: "full"
   verbose: true
 
 
@@ -35,13 +35,43 @@ run:
 # =============================================================================
 agent:
   # Specifies which agent configuration to use from the `configurations` block below.
-  active_agent: "m3a_gemini"
+  active_agent: "cool_agent"
 
   # --- Agent-Specific Settings ---
   # Each agent has its own configuration block. The script will only use the
   # settings for the `active_agent` specified above.
   configurations:
     
+    celil_agent:
+      registry_name: "celil_agent"
+      
+      # FREE Qwen2.5 VL model via OpenRouter (excellent for UI understanding!)
+      model_name: "qwen/qwen2.5-vl-72b-instruct:free"
+      temperature: 0.0
+      max_tokens: 2048
+      high_credits: true  # User has 10+ credits = 1000 daily requests instead of 50
+      
+      # UI-TARS Configuration for Action Generation
+      ui_tars_model_name: "avil/UI-TARS:latest"
+      ui_tars_temperature: 0.0
+      ui_tars_max_new_tokens: 256
+      
+      # Agent timing
+      transition_pause: 1.0
+
+      # Speed & Optimization Settings
+      speed_mode: true                # Master toggle for all optimizations.
+      qc_fast_threshold: 8.0          # Confidence score from Section Leader to bypass QC.
+
+    cool_agent:
+      registry_name: "cool_agent"
+      model_name: "auto"
+      temperature: 0.0
+      top_p: 0.95
+      max_retry: 3
+      wait_after_action_seconds: 2.0
+      enable_safety_checks: true
+
     # Configuration for the M3A OpenRouter agent
     m3a_openrouter:
       # This name must match the agent's name in the registry.
@@ -84,6 +114,60 @@ agent:
       # Whether to enable the built-in Gemini safety checks.
       enable_safety_checks: true
 
+    # Configuration for the V-DROID agent
+    v_droid:
+      # This name must match the agent's name in the registry.
+      registry_name: "v_droid_agent"
+      
+      # Use "auto" for smart Gemini model routing (automatically selects best available model)
+      model_name: "auto"
+
+      # LLM generation temperature.
+      temperature: 0.0
+      
+      # Top-p sampling parameter for the Gemini API.
+      top_p: 0.95
+      
+      # Max number of retries for API calls.
+      max_retry: 3
+      
+      # Seconds to wait for UI to stabilize after an action.
+      wait_after_action_seconds: 2.0
+      
+      # Whether to enable the built-in Gemini safety checks.
+      enable_safety_checks: true
+
+      # Batch processing settings for rate limit optimization
+      enable_batch_verification: true  # Use batch processing for candidate verification
+      batch_size: 0  # Maximum candidates to process in one batch (0 = no limit)
+      batch_delay_ms: 0  # Additional delay between requests in ms (0 = rely on router's smart delays)
+
+    # Configuration for the V-DROID Ollama agent (local inference)
+    v_droid_ollama:
+      # This name must match the agent's name in the registry.
+      registry_name: "v_droid_ollama_agent"
+      
+      # The Ollama model to use for local inference.
+      model_name: "gemma3:4b"
+
+      # LLM generation temperature.
+      temperature: 0.0
+      
+      # Max number of retries for LLM calls.
+      max_retry: 3
+      
+      # Seconds to wait for UI to stabilize after an action.
+      wait_after_action_seconds: 2.0
+      
+      # Ollama server host.
+      # host: "localhost"
+      
+      # Ollama server port.
+      # port: 11434
+      
+      # Request timeout in seconds.
+      # timeout: 60
+
 
 # =============================================================================
 # TASK CONFIGURATION
@@ -91,9 +175,9 @@ agent:
 task:
   # Specific task to run. If null, a random/full suite is used.
   # Example: "ContactsAddContact"
-  name: null
+  name: ""  # Empty string = run random/full suite
   suite_family: "android_world"
-  n_task_combinations: 1 # For "full" mode
+  n_task_combinations: 1  # For "full" mode
   random_seed: 30
 
 

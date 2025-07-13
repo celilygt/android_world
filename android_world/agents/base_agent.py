@@ -50,6 +50,7 @@ class EnvironmentInteractingAgent(abc.ABC):
       env: interface.AsyncEnv,
       name: str = '',
       transition_pause: float | None = 1.0,
+      **kwargs,
   ):
     """Initializes the agent.
 

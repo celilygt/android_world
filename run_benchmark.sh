@@ -383,7 +383,7 @@ trap '
   eval "$PYTHON_CMD" &
   PID=$!
   wait $PID
-) 2>&1 | tee "$LOG_FILE" | grep -v "Raw LLM Response"
+) 2>&1 | tee "$LOG_FILE"
 
 # Create code dump and combine logs after successful execution
 create_code_dump

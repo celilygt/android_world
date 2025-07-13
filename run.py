@@ -304,6 +304,7 @@ def _get_agent(
             max_retry=_MAX_RETRY.value,
             enable_safety_checks=_ENABLE_SAFETY_CHECKS.value,
             verbose=_VERBOSE.value,
+            run_log_dir=_RUN_LOG_DIR.value,
         )
         agent_kwargs['llm'] = llm
 

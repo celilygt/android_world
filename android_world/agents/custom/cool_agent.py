@@ -335,6 +335,7 @@ class CoolAgent(base_agent.EnvironmentInteractingAgent):
             llm: gemini_gemma_wrapper.GeminiGemmaWrapper,
             name: str = 'CoolAgent',
             wait_after_action_seconds: float = 2.0,
+            **kwargs,
     ):
         """Initializes a CoolAgent Agent.
 
@@ -350,15 +351,17 @@ class CoolAgent(base_agent.EnvironmentInteractingAgent):
         self.history = []
         self.additional_guidelines = None
         self.wait_after_action_seconds = wait_after_action_seconds
+        self.episode_state_action_history = set()
 
     def set_task_guidelines(self, task_guidelines: list[str]) -> None:
         self.additional_guidelines = task_guidelines
 
-    def reset(self, go_home_on_reset: bool = False):
-        super().reset(go_home_on_reset)
+    def reset(self, go_home: bool = False):
+        super().reset(go_home)
         # Hide the coordinates on screen which might affect the vision model.
         self.env.hide_automation_ui()
         self.history = []
+        self.episode_state_action_history = set()
 
     def step(self, goal: str) -> base_agent.AgentInteractionResult:
         step_data = {
@@ -444,6 +447,19 @@ class CoolAgent(base_agent.EnvironmentInteractingAgent):
                 False,
                 step_data,
             )
+
+        # Loop detection logic.
+        state_action_pair = (before_ui_elements_list, action)
+        if state_action_pair in self.episode_state_action_history:
+            print(f"LOOP DETECTED: Refusing to execute repetitive action: {action}")
+            step_data["summary"] = (
+                "The agent suggested an action that it has already tried in this"
+                " exact state earlier in the episode. To avoid a loop, no action"
+                " was performed. Please suggest a different action."
+            )
+            self.history.append(step_data)
+            return base_agent.AgentInteractionResult(False, step_data)
+        self.episode_state_action_history.add(state_action_pair)
 
         print('Action: ' + action)
         print('Reason: ' + reason)

@@ -15,6 +15,7 @@
 """Gemini API wrapper for Gemma models with smart routing and rate limiting."""
 
 import json
+import logging
 import os
 import time
 from datetime import datetime, timezone
@@ -29,20 +30,37 @@ from PIL import Image
 
 from android_world.agents.llm_wrappers import base_wrapper
 
-# Add detailed logging setup
-import logging
-
 # Configure detailed LLM logging
 llm_logger = logging.getLogger('gemini_llm_calls')
-llm_logger.setLevel(logging.INFO)
 
-# Create handler if it doesn't exist
-if not llm_logger.handlers:
-    handler = logging.StreamHandler()
-    formatter = logging.Formatter('🤖 GEMINI [%(asctime)s] %(message)s', datefmt='%H:%M:%S')
+
+def configure_llm_logger(run_log_dir: Optional[str] = None):
+    """Configures the LLM logger to either log to a file or the console."""
+    if llm_logger.handlers:
+        # Clear existing handlers to avoid duplicates on re-configuration
+        llm_logger.handlers.clear()
+
+    llm_logger.setLevel(logging.INFO)
+    formatter = logging.Formatter(
+        '🤖 GEMINI [%(asctime)s] %(message)s', datefmt='%H:%M:%S'
+    )
+
+    if run_log_dir:
+        # Log to a file
+        log_file_path = Path(run_log_dir) / 'llm_interactions.log'
+        handler = logging.FileHandler(log_file_path, mode='a')
+        # Inform user only once that file logging is active.
+        if not getattr(configure_llm_logger, 'has_run', False):
+            print(f'📝 LLM interactions are being logged to: {log_file_path}')
+            configure_llm_logger.has_run = True
+    else:
+        # Log to console (fallback)
+        handler = logging.StreamHandler()
+
     handler.setFormatter(formatter)
     llm_logger.addHandler(handler)
-    llm_logger.propagate = False  # Prevent duplicate logs
+    llm_logger.propagate = False
+
 
 SAFETY_SETTINGS_BLOCK_NONE = {
     types.HarmCategory.HARM_CATEGORY_HARASSMENT: types.HarmBlockThreshold.BLOCK_NONE,
@@ -238,11 +256,11 @@ class GeminiModelRouter:
 
     def select_best_model(self, prompt: str, max_wait_seconds: int = 60) -> Optional[str]:
         """Select the best available model for the given prompt.
-        
+
         Args:
             prompt: The text prompt to process
             max_wait_seconds: Maximum seconds to wait for minute limits to reset
-            
+
         Returns:
             Selected model name or None if no model available after waiting
         """
@@ -336,11 +354,15 @@ class GeminiGemmaWrapper(
             top_p: float = 0.95,
             enable_safety_checks: bool = True,
             verbose: bool = False,
+            run_log_dir: Optional[str] = None,
             **kwargs,  # Accept other kwargs to not break initialization
     ):
         if 'GEMINI_API_KEY' not in os.environ:
             raise RuntimeError('GEMINI_API_KEY environment variable not set.')
         genai.configure(api_key=os.environ['GEMINI_API_KEY'])
+
+        # Configure logger before any logging happens
+        configure_llm_logger(run_log_dir)
 
         self.max_retry = min(max(1, max_retry), 5)
         self.enable_safety_checks = enable_safety_checks

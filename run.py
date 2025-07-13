@@ -42,6 +42,7 @@ from android_world.task_evals import task_eval
 from android_world.agents import base_agent
 from android_world.agents import human_agent
 from android_world.agents import infer
+from android_world.agents.llm_wrappers import gemini_gemma_wrapper
 from android_world.agents import m3a
 from android_world.agents import random_agent
 from android_world.agents import seeact
@@ -294,6 +295,17 @@ def _get_agent(
         agent_kwargs['qc_fast_threshold'] = _QC_FAST_THRESHOLD.value
     if _SPEED_MODE.value is not None: ### <--- ADD THIS LINE (Step 2)
         agent_kwargs['speed_mode'] = _SPEED_MODE.value
+
+    if _AGENT_NAME.value == 'cool_agent':
+        llm = gemini_gemma_wrapper.GeminiGemmaWrapper(
+            model_name=_MODEL_NAME.value,
+            temperature=_TEMPERATURE.value,
+            top_p=_TOP_P.value,
+            max_retry=_MAX_RETRY.value,
+            enable_safety_checks=_ENABLE_SAFETY_CHECKS.value,
+            verbose=_VERBOSE.value,
+        )
+        agent_kwargs['llm'] = llm
 
     agent = agent_registry.get_agent(
         name=_AGENT_NAME.value,

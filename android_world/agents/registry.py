@@ -16,6 +16,7 @@
 
 import inspect
 from typing import Callable, Dict
+from android_world.agents.custom import cool_agent
 from android_world.agents import base_agent
 from android_world.env import interface
 
@@ -85,6 +86,7 @@ def _register_all_agents():
     register('v_droid_agent', v_droid_agent.VDroidAgent)
     register('v_droid_ollama_agent', v_droid_ollama_agent.VDroidOllamaAgent)
     register('celil_agent', celil_agent.CelilAgent)
+    register('cool_agent', cool_agent.CoolAgent)
 
 # Perform registration automatically when the module is imported.
 _register_all_agents() 

@@ -35,7 +35,7 @@ run:
 # =============================================================================
 agent:
   # Specifies which agent configuration to use from the `configurations` block below.
-  active_agent: "celil_agent"
+  active_agent: "cool_agent"
 
   # --- Agent-Specific Settings ---
   # Each agent has its own configuration block. The script will only use the
@@ -62,6 +62,15 @@ agent:
       # Speed & Optimization Settings
       speed_mode: true                # Master toggle for all optimizations.
       qc_fast_threshold: 8.0          # Confidence score from Section Leader to bypass QC.
+
+    cool_agent:
+      registry_name: "cool_agent"
+      model_name: "auto"
+      temperature: 0.0
+      top_p: 0.95
+      max_retry: 3
+      wait_after_action_seconds: 2.0
+      enable_safety_checks: true
 
     # Configuration for the M3A OpenRouter agent
     m3a_openrouter:

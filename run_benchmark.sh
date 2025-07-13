@@ -354,8 +354,13 @@ trap '
   [ ! -z "$PID" ] && kill -- -"$PID" 2>/dev/null
   # Create code dump on interrupt
   echo -e "${C_YELLOW}Creating code state dump...${C_NC}"
-  python create_celil_dump.py > /dev/null 2>&1
-  mv celil_dump.md "$RUN_DIR/celil_dump.md" 2>/dev/null || true
+  if [[ "$active_agent_key" == "celil_agent" ]]; then
+    python create_celil_dump.py > /dev/null 2>&1
+    mv celil_dump.md "$RUN_DIR/celil_dump.md" 2>/dev/null || true
+  else
+    python create_cool_agent_dump.py > /dev/null 2>&1
+    mv cool_agent_dump.md "$RUN_DIR/cool_agent_dump.md" 2>/dev/null || true
+  fi
   # Stop Ollama if we started it
   if [[ "$agent_registry_name" == *"ollama"* ]] && [ ! -z "$OLLAMA_PID" ]; then
       echo -e "${C_YELLOW}🛑 Stopping Ollama server...${C_NC}"
@@ -377,8 +382,13 @@ trap '
 
 # Create code dump after successful execution
 echo -e "${C_GREEN}Creating code state dump...${C_NC}"
-python create_celil_dump.py > /dev/null 2>&1
-mv celil_dump.md "$RUN_DIR/celil_dump.md" 2>/dev/null || true
+if [[ "$active_agent_key" == "celil_agent" ]]; then
+  python create_celil_dump.py > /dev/null 2>&1
+  mv celil_dump.md "$RUN_DIR/celil_dump.md" 2>/dev/null || true
+else
+  python create_cool_agent_dump.py > /dev/null 2>&1
+  mv cool_agent_dump.md "$RUN_DIR/cool_agent_dump.md" 2>/dev/null || true
+fi
 
 # Combine logs after successful execution
 combine_logs

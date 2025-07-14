@@ -22,6 +22,7 @@ import os
 import random
 import time
 import traceback
+import yaml
 from typing import Any, Callable, Type, TypeVar
 
 from android_env import env_interface
@@ -219,24 +220,35 @@ def _filter_tasks(
       subset[name] = instances
   return subset
 
-
-import yaml
-
 def _update_completed_tasks(task_name: str):
-    """Updates the completed_tasks.yaml file with the given task name."""
+    """
+    Updates the completed_tasks.yaml file with the given task name.
+    This function is robust to the file being non-existent, empty, or malformed.
+    """
     file_path = 'config/completed_tasks.yaml'
+    data = None
     try:
         with open(file_path, 'r') as f:
             data = yaml.safe_load(f)
-            if data is None:
-                data = {'completed_tasks': []}
     except FileNotFoundError:
-        data = {'completed_tasks': []}
+        pass  # File doesn't exist, it will be created.
 
+    # If file was empty/non-existent (data is None) or not a dictionary,
+    # initialize data as an empty dictionary.
+    if not isinstance(data, dict):
+        data = {}
+
+    # Ensure 'completed_tasks' key exists and its value is a list.
+    if 'completed_tasks' not in data or not isinstance(
+            data['completed_tasks'], list
+    ):
+        data['completed_tasks'] = []
+
+    # Now it is safe to check for the task_name and append.
     if task_name not in data['completed_tasks']:
         data['completed_tasks'].append(task_name)
         with open(file_path, 'w') as f:
-            yaml.dump(data, f)
+            yaml.dump(data, f, default_flow_style=False)
 
 def _run_task(
     task: TaskEvalType,

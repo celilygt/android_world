@@ -296,7 +296,7 @@ build_python_command() {
 
     # Add the skip_tasks flag if enabled
     if [ "$SKIP_COMPLETED" = true ]; then
-        completed_tasks=$(yq e '.completed_tasks | join(",")' config/completed_tasks.yaml)
+        completed_tasks=$(yq e '.completed_tasks // [] | join(",")' config/completed_tasks.yaml)
         if [ -n "$completed_tasks" ]; then
             common_flags="$common_flags --skip_tasks=\"$completed_tasks\""
         fi

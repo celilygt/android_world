@@ -113,9 +113,8 @@ PROMPT_PREFIX = (
     ' specific UI element, leave it empty when scroll the whole screen:'
     ' `{{\"action_type\": \"scroll\", \"direction\": <up, down, left, right>,'
     ' \"index\": <optional_target_index>}}`\n'
-    '- Open an app (nothing will happen if the app is not'
-    ' installed): `{{\"action_type\": \"open_app\", \"app_name\": <name>}}`\n'
-    '- Wait for the screen to update: `{{\"action_type\": \"wait\"}}`\n'
+    + APP_LIST_GUIDANCE
+    + '- Wait for the screen to update: `{{\"action_type\": \"wait\"}}`\n'
 )
 
 GUIDANCE = (

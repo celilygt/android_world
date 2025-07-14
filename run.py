@@ -126,6 +126,12 @@ _N_TASK_COMBINATIONS = flags.DEFINE_integer(
     'Number of task instances to run for each task template.',
 )
 
+_SKIP_TASKS = flags.DEFINE_list(
+    'skip_tasks',
+    [],
+    'A comma-separated list of task names to skip.',
+)
+
 _CHECKPOINT_DIR = flags.DEFINE_string(
     'checkpoint_dir',
     '',
@@ -362,6 +368,8 @@ def _main() -> None:
         tasks=_TASKS.value,
         use_identical_params=_FIXED_TASK_SEED.value,
     )
+    if _SKIP_TASKS.value:
+        suite = {k: v for k, v in suite.items() if k not in _SKIP_TASKS.value}
     suite.suite_family = _SUITE_FAMILY.value
 
     print("🤖 Initializing agent...")

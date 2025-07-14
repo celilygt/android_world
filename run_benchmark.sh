@@ -33,6 +33,7 @@ Options:
   --config=<path>     Path to a custom YAML config file.
   --override_agent=<agent_key>
                       Run with a different agent from the config, e.g., 'm3a_gemini'.
+  --skip_completed    Skip tasks that are already marked as completed in 'config/completed_tasks.yaml'.
   --help, -h          Show this help message.
 EOF
 }
@@ -49,11 +50,13 @@ check_yq
 # --- Configuration Loading and Parsing ---
 CONFIG_FILE="config/default.yaml"
 OVERRIDE_AGENT=""
+SKIP_COMPLETED=true
 
 for arg in "$@"; do
     case $arg in
         --config=*) CONFIG_FILE="${arg#*=}"; shift;;
         --override_agent=*) OVERRIDE_AGENT="${arg#*=}"; shift;;
+        --skip_completed) SKIP_COMPLETED=true; shift;;
         -h|--help) show_help; exit 0;;
     esac
 done
@@ -290,6 +293,15 @@ build_python_command() {
 
     # Add the run log directory flag
     common_flags="$common_flags --run_log_dir=\"$RUN_DIR\""
+
+    # Add the skip_tasks flag if enabled
+    if [ "$SKIP_COMPLETED" = true ]; then
+        completed_tasks=$(yq e '.completed_tasks | join(",")' config/completed_tasks.yaml)
+        if [ -n "$completed_tasks" ]; then
+            common_flags="$common_flags --skip_tasks=\"$completed_tasks\""
+        fi
+    fi
+
     echo "$base_cmd $common_flags"
 }
 

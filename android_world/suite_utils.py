@@ -220,6 +220,22 @@ def _filter_tasks(
   return subset
 
 
+import yaml
+
+def _update_completed_tasks(task_name: str):
+    """Updates the completed_tasks.yaml file with the given task name."""
+    file_path = 'config/completed_tasks.yaml'
+    try:
+        with open(file_path, 'r') as f:
+            data = yaml.safe_load(f) or {'completed_tasks': []}
+    except FileNotFoundError:
+        data = {'completed_tasks': []}
+
+    if task_name not in data['completed_tasks']:
+        data['completed_tasks'].append(task_name)
+        with open(file_path, 'w') as f:
+            yaml.dump(data, f)
+
 def _run_task(
     task: TaskEvalType,
     run_episode: Callable[[TaskEvalType], episode_runner.EpisodeResult],
@@ -273,6 +289,9 @@ def _run_task(
 
     if demo_mode:
       _display_success_overlay(env.controller, agent_successful)
+
+    if agent_successful > 0.5:
+        _update_completed_tasks(task.name)
 
     result = {
         constants.EpisodeConstants.GOAL: task.goal,

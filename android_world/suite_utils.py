@@ -227,7 +227,9 @@ def _update_completed_tasks(task_name: str):
     file_path = 'config/completed_tasks.yaml'
     try:
         with open(file_path, 'r') as f:
-            data = yaml.safe_load(f) or {'completed_tasks': []}
+            data = yaml.safe_load(f)
+            if data is None:
+                data = {'completed_tasks': []}
     except FileNotFoundError:
         data = {'completed_tasks': []}
 

@@ -14,7 +14,10 @@
 
 """A Multimodal Autonomous Agent for Android (M3A)."""
 
+import os
 import time
+from pathlib import Path
+import cv2
 from android_world.agents import agent_utils
 from android_world.agents import base_agent
 from android_world.agents.llm_wrappers import gemini_gemma_wrapper
@@ -67,54 +70,54 @@ APP_LIST_GUIDANCE = (
 )
 
 PROMPT_PREFIX = (
-    'You are an agent who can operate an Android phone on behalf of a user.'
-    ' Based on user\'s goal/request, you may\n'
-    '- Answer back if the request/goal is a question (or a chat message),'
-    ' like user asks "What is my schedule for today?".\n'
-    '- Complete some tasks described in the requests/goals by'
-    ' performing actions (step by step) on the phone.\n\n'
-    'When given a user request, you will try to complete it step by step.'
-    ' At each step, you will be given the current screenshot (including the'
-    ' original screenshot and the same screenshot with bounding'
-    ' boxes and numeric indexes added to some UI elements) and a history of'
-    ' what you have done (in text). Based on these pieces of information and'
-    ' the goal, you must choose to perform one of the'
-    ' action in the following list (action description followed by the JSON'
-    ' format) by outputing the action in the correct JSON format.\n'
-    '- If you think the task has been completed, finish the task by using the'
-    ' status action with complete as goal_status:'
-    ' `{{\"action_type\": \"status\", \"goal_status\": \"complete\"}}`\n'
-    "- If you think the task is not feasible (including cases like you don't"
-    ' have enough information or can not perform some necessary actions),'
-    ' finish by using the `status` action with infeasible as goal_status:'
-    ' `{{\"action_type\": \"status\", \"goal_status\": \"infeasible\"}}`\n'
-    "- Answer user\'s question:"
-    ' `{{\"action_type\": \"answer\", \"text\": \"<answer_text>\"}}`\n'
-    '- Click/tap on an element on the screen. We have added marks (bounding'
-    ' boxes with numeric indexes on their TOP LEFT corner) to most of the UI'
-    ' elements in the screenshot, use the numeric index to indicate which'
-    ' element you want to click:'
-    ' `{{\"action_type\": \"click\", \"index\": <target_index>}}`.\n'
-    '- Long press on an element on the screen, similar with the click action'
-    ' above, use the numeric label on the bounding box to indicate which'
-    ' element you want to long press:'
-    ' `{{\"action_type\": \"long_press\", \"index\": <target_index>}}`.\n'
-    '- Type text into a text field (this action contains clicking the text'
-    ' field, typing in the text and pressing the enter, so no need to click on'
-    ' the target field to start), use the numeric label'
-    ' on the bounding box to indicate the target text field:'
-    ' `{{\"action_type\": \"input_text\", \"text\": <text_input>,'
-    ' \"index\": <target_index>}}`\n'
-    '- Press the Enter key: `{{\"action_type\": \"keyboard_enter\"}}`\n'
-    '- Navigate to the home screen: `{{\"action_type\": \"navigate_home\"}}`\n'
-    '- Navigate back: `{{\"action_type\": \"navigate_back\"}}`\n'
-    '- Scroll the screen or a scrollable UI element in one of the four'
-    ' directions, use the same numeric index as above if you want to scroll a'
-    ' specific UI element, leave it empty when scroll the whole screen:'
-    ' `{{\"action_type\": \"scroll\", \"direction\": <up, down, left, right>,'
-    ' \"index\": <optional_target_index>}}`\n'
-    + APP_LIST_GUIDANCE
-    + '- Wait for the screen to update: `{{\"action_type\": \"wait\"}}`\n'
+        'You are an agent who can operate an Android phone on behalf of a user.'
+        ' Based on user\'s goal/request, you may\n'
+        '- Answer back if the request/goal is a question (or a chat message),'
+        ' like user asks "What is my schedule for today?".\n'
+        '- Complete some tasks described in the requests/goals by'
+        ' performing actions (step by step) on the phone.\n\n'
+        'When given a user request, you will try to complete it step by step.'
+        ' At each step, you will be given the current screenshot (including the'
+        ' original screenshot and the same screenshot with bounding'
+        ' boxes and numeric indexes added to some UI elements) and a history of'
+        ' what you have done (in text). Based on these pieces of information and'
+        ' the goal, you must choose to perform one of the'
+        ' action in the following list (action description followed by the JSON'
+        ' format) by outputing the action in the correct JSON format.\n'
+        '- If you think the task has been completed, finish the task by using the'
+        ' status action with complete as goal_status:'
+        ' `{{\"action_type\": \"status\", \"goal_status\": \"complete\"}}`\n'
+        "- If you think the task is not feasible (including cases like you don't"
+        ' have enough information or can not perform some necessary actions),'
+        ' finish by using the `status` action with infeasible as goal_status:'
+        ' `{{\"action_type\": \"status\", \"goal_status\": \"infeasible\"}}`\n'
+        "- Answer user\'s question:"
+        ' `{{\"action_type\": \"answer\", \"text\": \"<answer_text>\"}}`\n'
+        '- Click/tap on an element on the screen. We have added marks (bounding'
+        ' boxes with numeric indexes on their TOP LEFT corner) to most of the UI'
+        ' elements in the screenshot, use the numeric index to indicate which'
+        ' element you want to click:'
+        ' `{{\"action_type\": \"click\", \"index\": <target_index>}}`.\n'
+        '- Long press on an element on the screen, similar with the click action'
+        ' above, use the numeric label on the bounding box to indicate which'
+        ' element you want to long press:'
+        ' `{{\"action_type\": \"long_press\", \"index\": <target_index>}}`.\n'
+        '- Type text into a text field (this action contains clicking the text'
+        ' field, typing in the text and pressing the enter, so no need to click on'
+        ' the target field to start), use the numeric label'
+        ' on the bounding box to indicate the target text field:'
+        ' `{{\"action_type\": \"input_text\", \"text\": <text_input>,'
+        ' \"index\": <target_index>}}`\n'
+        '- Press the Enter key: `{{\"action_type\": \"keyboard_enter\"}}`\n'
+        '- Navigate to the home screen: `{{\"action_type\": \"navigate_home\"}}`\n'
+        '- Navigate back: `{{\"action_type\": \"navigate_back\"}}`\n'
+        '- Scroll the screen or a scrollable UI element in one of the four'
+        ' directions, use the same numeric index as above if you want to scroll a'
+        ' specific UI element, leave it empty when scroll the whole screen:'
+        ' `{{\"action_type\": \"scroll\", \"direction\": <up, down, left, right>,'
+        ' \"index\": <optional_target_index>}}`\n'
+        + APP_LIST_GUIDANCE
+        + '- Wait for the screen to update: `{{\"action_type\": \"wait\"}}`\n'
 )
 
 GUIDANCE = (
@@ -377,6 +380,7 @@ class CoolAgent(base_agent.EnvironmentInteractingAgent):
             llm: gemini_gemma_wrapper.GeminiGemmaWrapper,
             name: str = 'CoolAgent',
             wait_after_action_seconds: float = 2.0,
+            run_log_dir: str | None = None,
             **kwargs,
     ):
         """Initializes a CoolAgent Agent.
@@ -387,6 +391,7 @@ class CoolAgent(base_agent.EnvironmentInteractingAgent):
           name: The agent name.
           wait_after_action_seconds: Seconds to wait for the screen to stablize
             after executing an action
+          run_log_dir: Directory to save run artifacts for debugging.
         """
         super().__init__(env, name)
         self.llm = llm
@@ -394,6 +399,12 @@ class CoolAgent(base_agent.EnvironmentInteractingAgent):
         self.additional_guidelines = None
         self.wait_after_action_seconds = wait_after_action_seconds
         self.episode_state_action_history = set()
+        self.run_log_dir = run_log_dir
+        if self.run_log_dir:
+            self.screenshot_dir = Path(self.run_log_dir) / 'screenshots'
+            self.screenshot_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            self.screenshot_dir = None
 
     def set_task_guidelines(self, task_guidelines: list[str]) -> None:
         self.additional_guidelines = task_guidelines
@@ -406,6 +417,7 @@ class CoolAgent(base_agent.EnvironmentInteractingAgent):
         self.episode_state_action_history = set()
 
     def step(self, goal: str) -> base_agent.AgentInteractionResult:
+        step_num = len(self.history) + 1
         step_data = {
             'raw_screenshot': None,
             'before_screenshot_with_som': None,
@@ -420,7 +432,7 @@ class CoolAgent(base_agent.EnvironmentInteractingAgent):
             'summary': None,
             'summary_raw_response': None,
         }
-        print('----------step ' + str(len(self.history) + 1))
+        print('----------step ' + str(step_num))
 
         state = self.get_post_transition_state()
         logical_screen_size = self.env.logical_screen_size
@@ -445,6 +457,12 @@ class CoolAgent(base_agent.EnvironmentInteractingAgent):
                     orientation,
                 )
         step_data['before_screenshot_with_som'] = before_screenshot.copy()
+
+        if self.screenshot_dir:
+            raw_path = self.screenshot_dir / f'{step_num}_before_raw.png'
+            cv2.imwrite(str(raw_path), state.pixels.copy())
+            marked_path = self.screenshot_dir / f'{step_num}_before_marked.png'
+            cv2.imwrite(str(marked_path), before_screenshot)
 
         action_prompt = _action_selection_prompt(
             goal,
@@ -475,8 +493,6 @@ class CoolAgent(base_agent.EnvironmentInteractingAgent):
 
         reason, action = cool_agent_utils.parse_reason_action_output(action_output)
 
-        # If the output is not in the right format, add it to step summary which
-        # will be passed to next step and return.
         if (not reason) or (not action):
             print('Action prompt output is not in the correct format.')
             step_data['summary'] = (
@@ -490,14 +506,13 @@ class CoolAgent(base_agent.EnvironmentInteractingAgent):
                 step_data,
             )
 
-        # Loop detection logic.
         state_action_pair = (before_ui_elements_list, action)
         if state_action_pair in self.episode_state_action_history:
-            print(f"LOOP DETECTED: Refusing to execute repetitive action: {action}")
-            step_data["summary"] = (
-                "The agent suggested an action that it has already tried in this"
-                " exact state earlier in the episode. To avoid a loop, no action"
-                " was performed. Please suggest a different action."
+            print(f'LOOP DETECTED: Refusing to execute repetitive action: {action}')
+            step_data['summary'] = (
+                'The agent suggested an action that it has already tried in this'
+                ' exact state earlier in the episode. To avoid a loop, no action'
+                ' was performed. Please suggest a different action.'
             )
             self.history.append(step_data)
             return base_agent.AgentInteractionResult(False, step_data)
@@ -540,13 +555,14 @@ class CoolAgent(base_agent.EnvironmentInteractingAgent):
                     f' UI element list only has {num_ui_elements} elements.'
                 )
                 step_data['summary'] = (
-                    'The parameter index is out of range. Remember the index must be in'
-                    ' the UI element list!'
+                    f'Action failed: The generated index {action_index} is invalid. '
+                    f'The number of available UI elements is {num_ui_elements}, so the'
+                    f' index must be between 0 and {num_ui_elements - 1}. Please'
+                    ' choose a valid index from the provided list.'
                 )
                 self.history.append(step_data)
                 return base_agent.AgentInteractionResult(False, step_data)
 
-            # Add mark to the target element.
             cool_agent_utils.add_ui_element_mark(
                 step_data['raw_screenshot'],
                 before_ui_elements[action_index],
@@ -604,6 +620,9 @@ class CoolAgent(base_agent.EnvironmentInteractingAgent):
                     physical_frame_boundary,
                     orientation,
                 )
+        if self.screenshot_dir:
+            after_marked_path = self.screenshot_dir / f'{step_num}_after_marked.png'
+            cv2.imwrite(str(after_marked_path), after_screenshot)
 
         cool_agent_utils.add_screenshot_label(
             step_data['before_screenshot_with_som'], 'before'
@@ -611,44 +630,73 @@ class CoolAgent(base_agent.EnvironmentInteractingAgent):
         cool_agent_utils.add_screenshot_label(after_screenshot, 'after')
         step_data['after_screenshot_with_som'] = after_screenshot.copy()
 
-        summary_prompt = _summarize_prompt(
-            action,
-            reason,
-            goal,
-            before_ui_elements_list,
-            after_ui_elements_list,
-        )
-        summary, is_safe, raw_response = self.llm.predict_mm(
-            summary_prompt,
-            [
-                before_screenshot,
-                after_screenshot,
-            ],
-        )
+        is_ui_changing_action = converted_action.action_type in [
+            'click',
+            'long_press',
+            'input_text',
+            'scroll',
+            'keyboard_enter',
+            'navigate_back',
+            'navigate_home',
+        ]
+        ui_did_not_change = before_ui_elements == after_ui_elements
 
-        if is_safe == False:  # pylint: disable=singleton-comparison
-            #  is_safe could be None
-            summary = '"""Summary triggered LLM safety classifier."""'
-
-        if not raw_response:
+        if is_ui_changing_action and ui_did_not_change:
             print(
-                'Error calling LLM in summarization phase. This should not happen: '
-                f'{summary}'
+                'Action appears to have had no effect on the UI tree. Overriding'
+                ' summary.'
             )
-            step_data['summary'] = (
-                    'Some error occurred calling LLM during summarization phase: %s'
-                    % summary
+            summary = (
+                f'I performed action `{action}` but the screen did not change. The'
+                ' action was ineffective. I need to re-evaluate and choose a'
+                ' different action.'
             )
-            self.history.append(step_data)
-            return base_agent.AgentInteractionResult(
-                False,
-                step_data,
+            step_data['summary_prompt'] = (
+                'N/A - Summary overridden due to ineffective action.'
+            )
+            step_data['summary'] = f'Action selected: {action}. {summary}'
+            step_data['summary_raw_response'] = (
+                'Summary overridden by ineffective action detector.'
+            )
+            print('Summary: ' + summary)
+        else:
+            summary_prompt = _summarize_prompt(
+                action,
+                reason,
+                goal,
+                before_ui_elements_list,
+                after_ui_elements_list,
+            )
+            summary, is_safe, raw_response = self.llm.predict_mm(
+                summary_prompt,
+                [
+                    step_data['before_screenshot_with_som'],
+                    after_screenshot,
+                ],
             )
 
-        step_data['summary_prompt'] = summary_prompt
-        step_data['summary'] = f'Action selected: {action}. {summary}'
-        print('Summary: ' + summary)
-        step_data['summary_raw_response'] = raw_response
+            if is_safe == False:  # pylint: disable=singleton-comparison
+                summary = '"""Summary triggered LLM safety classifier."""'
+
+            if not raw_response:
+                print(
+                    'Error calling LLM in summarization phase. This should not happen: '
+                    f'{summary}'
+                )
+                step_data['summary'] = (
+                        'Some error occurred calling LLM during summarization phase: %s'
+                        % summary
+                )
+                self.history.append(step_data)
+                return base_agent.AgentInteractionResult(
+                    False,
+                    step_data,
+                )
+
+            step_data['summary_prompt'] = summary_prompt
+            step_data['summary'] = f'Action selected: {action}. {summary}'
+            print('Summary: ' + summary)
+            step_data['summary_raw_response'] = raw_response
 
         self.history.append(step_data)
         return base_agent.AgentInteractionResult(

@@ -401,6 +401,10 @@ class CoolAgent(base_agent.EnvironmentInteractingAgent):
         self.history = []
         self.additional_guidelines = None
         self.episode_state_action_history = set()
+        self.set_run_log_dir(run_log_dir)
+
+    def set_run_log_dir(self, run_log_dir: str | None) -> None:
+        """Sets the directory for saving run artifacts and re-initializes subdirs."""
         self.run_log_dir = run_log_dir
         if self.run_log_dir:
             self.screenshot_dir = Path(self.run_log_dir) / 'screenshots'

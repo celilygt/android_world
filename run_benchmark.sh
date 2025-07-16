@@ -1,14 +1,13 @@
 #!/bin/bash
 
-# AndroidWorld Benchmark Runner Script v3.1
+# AndroidWorld Benchmark Runner Script v3.3
 # This script orchestrates benchmark runs using a central YAML configuration.
 # It handles environment setup, agent configuration, and execution, with
 # improved logging, graceful shutdown, and conditional output visibility.
 #
-# Revision Notes (v3.1):
-# - Generalized code dump logic for both celil_agent and cool_agent.
-# - Fixed name discrepancies causing empty analysis logs for cool_agent.
-# - Made dump file handling dynamic and extensible for future agents.
+# Revision Notes (v3.3):
+# - Fixed path mismatch where python script was creating its own run directory.
+#   The directory created by this script is now passed as the checkpoint_dir.
 
 set -e # Exit on any error
 
@@ -291,8 +290,9 @@ build_python_command() {
         echo -e "${C_RED}❌ Invalid run mode: $run_mode.${C_NC}"; exit 1
     fi
 
-    # Add the run log directory flag
+    # Add the run log and checkpoint directory flags, pointing to the same place.
     common_flags="$common_flags --run_log_dir=\"$RUN_DIR\""
+    common_flags="$common_flags --checkpoint_dir=\"$RUN_DIR\""
 
     # Add the skip_tasks flag if enabled
     if [ "$SKIP_COMPLETED" = true ]; then
@@ -319,75 +319,31 @@ create_code_dump() {
         # Move the generated dump file to the run-specific directory
         if [ -f "$DUMP_FILE_NAME" ]; then
             mv "$DUMP_FILE_NAME" "$RUN_DIR/$DUMP_FILE_NAME"
+            echo -e "${C_GREEN}✅ Code dump saved to $RUN_DIR/$DUMP_FILE_NAME${C_NC}"
         else
             echo -e "${C_RED}Warning: Dump script '$DUMP_SCRIPT_NAME' did not produce '$DUMP_FILE_NAME'.${C_NC}"
         fi
     fi
 }
 
-# --- Function to combine all logs ---
-combine_logs() {
-    local COMBINED_LOG_FILE="$RUN_DIR/full_analysis_log.md"
-    echo -e "${C_YELLOW}📝 Assembling the final analysis file for debugging...${C_NC}"
-
-    local INTRO_PROMPT="We are developing an android agent to control a mobile application, for the benchmark android_world. If this file is sent to you, this means there has been something wrong in the execution, either the agent couldn't finish the task, or had a runtime error. You will find the source code of the related files, run logs of the agent, and also the LLM interactions. Finally, you will also find the screenshots of the steps of the agent. Debug the error/mistake and lay it out clearly, then propose solutions. The proposed solutions should be in the format of full file changes, to accomodate direct copy and paste from this chat to the IDE"
-
-    echo "$INTRO_PROMPT" > "$COMBINED_LOG_FILE"
-    echo "" >> "$COMBINED_LOG_FILE"
-
-    local SCREENSHOT_DIR="$RUN_DIR/screenshots"
-    echo -e "\n\n## 📸 Screenshots Taken\n" >> "$COMBINED_LOG_FILE"
-    echo 'The following screenshots were saved during the run. The names correspond to the step number.' >> "$COMBINED_LOG_FILE"
-    echo '```text' >> "$COMBINED_LOG_FILE"
-    if [ -d "$SCREENSHOT_DIR" ] && [ -n "$(ls -A "$SCREENSHOT_DIR" 2>/dev/null)" ]; then
-        ls -1 "$SCREENSHOT_DIR" >> "$COMBINED_LOG_FILE"
-    else
-        echo "No screenshots were found or the directory is empty." >> "$COMBINED_LOG_FILE"
-    fi
-    echo '```' >> "$COMBINED_LOG_FILE"
-
-    # Add the Agent-specific code dump (if configured)
-    if [ -n "$DUMP_FILE_NAME" ]; then
-        local AGENT_DUMP_FILE="$RUN_DIR/$DUMP_FILE_NAME"
-        echo -e "\n\n## 💻 Agent Code State Dump ($DUMP_FILE_NAME)\n" >> "$COMBINED_LOG_FILE"
-        if [ -f "$AGENT_DUMP_FILE" ]; then
-            cat "$AGENT_DUMP_FILE" >> "$COMBINED_LOG_FILE"
-        else
-            echo '```text' >> "$COMBINED_LOG_FILE"
-            echo "--> $DUMP_FILE_NAME not found in $RUN_DIR." >> "$COMBINED_LOG_FILE"
-            echo '```' >> "$COMBINED_LOG_FILE"
-        fi
-    fi
-
-    echo -e "\n\n## 📜 Main Benchmark Run Log (benchmark_run.log)\n" >> "$COMBINED_LOG_FILE"
-    echo '```log' >> "$COMBINED_LOG_FILE"
-    [ -f "$LOG_FILE" ] && cat "$LOG_FILE" >> "$COMBINED_LOG_FILE" || echo "--> benchmark_run.log not found." >> "$COMBINED_LOG_FILE"
-    echo '```' >> "$COMBINED_LOG_FILE"
-
-    local LLM_LOG_FILE="$RUN_DIR/llm_interactions.log"
-    echo -e "\n\n## 🤖 LLM Interaction Log (llm_interactions.log)\n" >> "$COMBINED_LOG_FILE"
-    echo '```log' >> "$COMBINED_LOG_FILE"
-    [ -f "$LLM_LOG_FILE" ] && cat "$LLM_LOG_FILE" >> "$COMBINED_LOG_FILE" || echo "--> llm_interactions.log not found." >> "$COMBINED_LOG_FILE"
-    echo '```' >> "$COMBINED_LOG_FILE"
-
-    echo -e "${C_GREEN}✅ Combined analysis file created successfully: ${C_CYAN}${COMBINED_LOG_FILE}${C_NC}"
-}
-
-
 # --- Execution & Cleanup ---
 PID=
 trap '
   echo -e "\n${C_RED}🛑 Interrupted. Killing process tree...${C_NC}"
   [ ! -z "$PID" ] && kill -- -"$PID" 2>/dev/null
-  create_code_dump
+  # We cannot reliably generate the final analysis on interrupt, as it is now
+  # done per-task. The user can inspect the last completed task folder.
+  # The code dump is created at the start, so it will be present.
+  echo -e "${C_YELLOW}Artifacts from completed tasks are saved in their respective folders within $RUN_DIR${C_NC}"
   if [[ "$agent_registry_name" == *"ollama"* ]] && [ ! -z "$OLLAMA_PID" ]; then
       echo -e "${C_YELLOW}🛑 Stopping Ollama server...${C_NC}"
       kill $OLLAMA_PID 2>/dev/null || true
   fi
-  combine_logs
-  echo -e "${C_YELLOW}Artifacts and combined log saved to $RUN_DIR${C_NC}"
   exit 130
 ' SIGINT SIGTERM
+
+# Create code dump BEFORE running the python script so it is available to it.
+create_code_dump
 
 # Using a subshell to run the command in its own process group
 (
@@ -397,9 +353,7 @@ trap '
   wait $PID
 ) 2>&1 | tee "$LOG_FILE"
 
-# Create code dump and combine logs after successful execution
-create_code_dump
-combine_logs
-
+# Per-task analysis is now handled by the python script. This script's job is done.
 echo -e "${C_GREEN}🎉 Benchmark completed!${C_NC}"
+echo -e "${C_YELLOW}Per-task analysis and artifacts saved in subdirectories within: ${C_CYAN}$RUN_DIR${C_NC}"
 exit 0

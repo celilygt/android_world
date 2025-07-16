@@ -22,6 +22,7 @@ command-line flags.
 
 from collections.abc import Sequence
 import os
+import re
 import signal
 import sys
 from typing import Dict, Any
@@ -40,6 +41,8 @@ from android_world import suite_utils
 from android_world.agents import registry as agent_registry
 from android_world.task_evals import task_eval
 from android_world.agents import base_agent
+from android_world.agents.custom import cool_agent
+from android_world.agents.custom import cool_agent_utils
 from android_world.agents import human_agent
 from android_world.agents import infer
 from android_world.agents.llm_wrappers import gemini_gemma_wrapper
@@ -423,6 +426,22 @@ def _main() -> None:
                 print("=" * 80)
                 sys.stdout.flush()
 
+                # --- Per-task directory and logging setup ---
+                sanitized_task_name = re.sub(
+                    r'[^\w\s-]', '', task.name
+                ).strip().replace(' ', '_')
+                task_log_dir = os.path.join(checkpoint_dir, sanitized_task_name)
+                os.makedirs(task_log_dir, exist_ok=True)
+                print(f"📄 Logging artifacts for this task to: {task_log_dir}")
+
+                if isinstance(agent, cool_agent.CoolAgent):
+                    agent.set_run_log_dir(task_log_dir)
+                    if hasattr(agent, 'llm') and isinstance(
+                            agent.llm, gemini_gemma_wrapper.GeminiGemmaWrapper
+                    ):
+                        # Reconfigure logger to point to the new task-specific dir
+                        gemini_gemma_wrapper.configure_llm_logger(task_log_dir)
+
                 # Call original function but with enhanced episode runner
                 def enhanced_run_episode(task_arg):
                     print(f"\n🚀 Running episode for: {task_arg.name}")
@@ -468,6 +487,23 @@ def _main() -> None:
                 print(f"   Result: {'✅ Passed' if is_successful else '❌ Failed'}")
                 sys.stdout.flush()
 
+                # --- Generate per-task analysis markdown ---
+                if isinstance(agent, cool_agent.CoolAgent):
+                    dump_file_name = "cool_agent_dump.md"
+                    agent_code_dump_path = os.path.join(
+                        checkpoint_dir, dump_file_name
+                    )
+                    if os.path.exists(agent_code_dump_path):
+                        cool_agent_utils.generate_task_analysis_markdown(
+                            task_result=result,
+                            task_log_dir=task_log_dir,
+                            agent_code_dump_path=agent_code_dump_path,
+                        )
+                    else:
+                        print(
+                            '⚠️  Warning: Code dump file not found at'
+                            f' {agent_code_dump_path}. Skipping analysis markdown.'
+                        )
                 return result
 
             # Temporarily replace the function

@@ -280,7 +280,12 @@ def _get_agent(
     if _MAX_RETRY.value is not None:
         agent_kwargs['max_retry'] = _MAX_RETRY.value
     if _WAIT_AFTER_ACTION_SECONDS.value is not None:
-        agent_kwargs['wait_after_action_seconds'] = _WAIT_AFTER_ACTION_SECONDS.value
+        # Check for sentinel value to enable auto-wait (dynamic stabilization).
+        if _WAIT_AFTER_ACTION_SECONDS.value < 0:
+            agent_kwargs['wait_after_action_seconds'] = None
+            print('🔧 Using dynamic UI stabilization wait.')
+        else:
+            agent_kwargs['wait_after_action_seconds'] = _WAIT_AFTER_ACTION_SECONDS.value
     if _RUN_LOG_DIR.value is not None:
         agent_kwargs['run_log_dir'] = _RUN_LOG_DIR.value
 
@@ -368,9 +373,9 @@ def _main() -> None:
         tasks=_TASKS.value,
         use_identical_params=_FIXED_TASK_SEED.value,
     )
+    suite.suite_family = _SUITE_FAMILY.value
     if _SKIP_TASKS.value:
         suite = {k: v for k, v in suite.items() if k not in _SKIP_TASKS.value}
-    suite.suite_family = _SUITE_FAMILY.value
 
     print("🤖 Initializing agent...")
     sys.stdout.flush()
@@ -384,7 +389,10 @@ def _main() -> None:
         # MiniWoB pages change quickly, don't need to wait for screen to stabilize.
         agent.transition_pause = _MINIWOB_TRANSITION_PAUSE
     else:
-        agent.transition_pause = None
+        # If not already set to None by the config, keep the agent's default.
+        # This allows the new config to take effect without breaking other agents.
+        if agent.transition_pause is not None:
+            agent.transition_pause = None
 
     if _CHECKPOINT_DIR.value:
         checkpoint_dir = _CHECKPOINT_DIR.value

@@ -31,7 +31,7 @@ from android_world.env import representation_utils
 # The 'app_name' values are chosen to be compatible with `adb_utils.launch_app`.
 APP_LIST_GUIDANCE = (
     '- Open an app (nothing will happen if the app is not'
-    ' installed): `{{\"action_type\": \"open_app\", \"app_name\": <name>}}`\n'
+    ' installed): `{{\\"action_type\\": \\"open_app\\", \\"app_name\\": <name>}}`\n'
     '  You have the ability to directly open the following applications. If the'
     ' task description suggests using one of these apps, you should use this'
     ' action as your first step. Use the exact "app_name" from this list.\n'
@@ -86,38 +86,38 @@ PROMPT_PREFIX = (
         ' format) by outputing the action in the correct JSON format.\n'
         '- If you think the task has been completed, finish the task by using the'
         ' status action with complete as goal_status:'
-        ' `{{\"action_type\": \"status\", \"goal_status\": \"complete\"}}`\n'
+        ' `{{\\"action_type\\": \\"status\\", \\"goal_status\\": \\"complete\\"}}`\n'
         "- If you think the task is not feasible (including cases like you don't"
         ' have enough information or can not perform some necessary actions),'
         ' finish by using the `status` action with infeasible as goal_status:'
-        ' `{{\"action_type\": \"status\", \"goal_status\": \"infeasible\"}}`\n'
+        ' `{{\\"action_type\\": \\"status\\", \\"goal_status\\": \\"infeasible\\"}}`\n'
         "- Answer user\'s question:"
-        ' `{{\"action_type\": \"answer\", \"text\": \"<answer_text>\"}}`\n'
+        ' `{{\\"action_type\\": \\"answer\\", \\"text\\": \\"<answer_text>\\"}}\n'
         '- Click/tap on an element on the screen. We have added marks (bounding'
         ' boxes with numeric indexes on their TOP LEFT corner) to most of the UI'
         ' elements in the screenshot, use the numeric index to indicate which'
         ' element you want to click:'
-        ' `{{\"action_type\": \"click\", \"index\": <target_index>}}`.\n'
+        ' `{{\\"action_type\\": \\"click\\", \\"index\\": <target_index>}}`.\n'
         '- Long press on an element on the screen, similar with the click action'
         ' above, use the numeric label on the bounding box to indicate which'
         ' element you want to long press:'
-        ' `{{\"action_type\": \"long_press\", \"index\": <target_index>}}`.\n'
+        ' `{{\\"action_type\\": \\"long_press\\", \\"index\\": <target_index>}}`.\n'
         '- Type text into a text field (this action contains clicking the text'
         ' field, typing in the text and pressing the enter, so no need to click on'
         ' the target field to start), use the numeric label'
         ' on the bounding box to indicate the target text field:'
-        ' `{{\"action_type\": \"input_text\", \"text\": <text_input>,'
-        ' \"index\": <target_index>}}`\n'
-        '- Press the Enter key: `{{\"action_type\": \"keyboard_enter\"}}`\n'
-        '- Navigate to the home screen: `{{\"action_type\": \"navigate_home\"}}`\n'
-        '- Navigate back: `{{\"action_type\": \"navigate_back\"}}`\n'
+        ' `{{\\"action_type\\": \\"input_text\\", \\"text\\": <text_input>,'
+        ' \\"index\\": <target_index>}}`\n'
+        '- Press the Enter key: `{{\\"action_type\\": \\"keyboard_enter\\"}}`\n'
+        '- Navigate to the home screen: `{{\\"action_type\\": \\"navigate_home\\"}}`\n'
+        '- Navigate back: `{{\\"action_type\\": \\"navigate_back\\"}}`\n'
         '- Scroll the screen or a scrollable UI element in one of the four'
         ' directions, use the same numeric index as above if you want to scroll a'
         ' specific UI element, leave it empty when scroll the whole screen:'
-        ' `{{\"action_type\": \"scroll\", \"direction\": <up, down, left, right>,'
-        ' \"index\": <optional_target_index>}}`\n'
+        ' `{{\\"action_type\\": \\"scroll\\", \\"direction\\": <up, down, left, right>,'
+        ' \\"index\\": <optional_target_index>}}`\n'
         + APP_LIST_GUIDANCE
-        + '- Wait for the screen to update: `{{\"action_type\": \"wait\"}}`\n'
+        + '- Wait for the screen to update: `{{\\"action_type\\": \\"wait\\"}}`\n'
 )
 
 GUIDANCE = (
@@ -132,18 +132,30 @@ GUIDANCE = (
     ' needed to complete the task, for example if user asks'
     ' "what is my schedule tomorrow", then you may want to open the calendar'
     ' app (using the `open_app` action), look up information there, answer'
-    " user\'s question (using the `answer` action) and finish (using"
+    " user's question (using the `answer` action) and finish (using"
     ' the `status` action with complete as goal_status).\n'
     '- For requests that are questions (or chat messages), remember to use'
     ' the `answer` action to reply to user explicitly before finish!'
     ' Merely displaying the answer on the screen is NOT sufficient (unless'
     ' the goal is something like "show me ...").\n'
     '- If the desired state is already achieved (e.g., enabling Wi-Fi when'
-    " it\'s already on), you can just complete the task.\n"
+    " it's already on), you can just complete the task.\n"
     'Action Related:\n'
-    '- Use the `open_app` action whenever you want to open an app'
-    ' (nothing will happen if the app is not installed), do not use the'
-    ' app drawer to open an app unless all other ways have failed.\n'
+    '- Use the `open_app` action whenever possible to open an app. Do not use the'
+    ' app drawer unless `open_app` has failed.\n'
+    '- **SETUP SCREENS**: When setting up new apps (like Chrome or an audio recorder), you'
+    ' will often see setup screens. Your goal is to get to the main app screen. Decline'
+    ' optional features like "sync" or "add account" unless the task requires them. If you'
+    ' cannot perform a primary action (like typing a custom filename) on a setup screen,'
+    ' look for an "Apply", "Done", or "OK" button to exit the setup. You can often perform'
+    ' the action later on the main screen.\n'
+    '- **CRITICAL REASONING**: After an action, carefully observe the new screen to see what'
+    ' *actually* happened. Do not assume the action did what you expected. For example,'
+    ' clicking a "Record" button might start a timer, not open a "Save" dialog.\n'
+    '- **AVOID LOOPS**: If the history says your last action was ineffective, the screen'
+    ' did not change, or a loop was detected, you MUST try a different action or strategy.'
+    ' DO NOT REPEAT the failed action. Common alternative strategies include trying a'
+    ' different button, using `navigate_back`, or scrolling.\n'
     '- Use the `input_text` action whenever you want to type'
     ' something (including password) instead of clicking characters on the'
     ' keyboard one by one. Sometimes there is some default text in the text'
@@ -155,7 +167,7 @@ GUIDANCE = (
     '- Consider exploring the screen by using the `scroll`'
     ' action with different directions to reveal additional content.\n'
     '- The direction parameter for the `scroll` action can be confusing'
-    " sometimes as it\'s opposite to swipe, for example, to view content at the"
+    " sometimes as it's opposite to swipe, for example, to view content at the"
     ' bottom, the `scroll` direction should be set to "down". It has been'
     ' observed that you have difficulties in choosing the correct direction, so'
     ' if one does not work, try the opposite as well.\n'
@@ -236,13 +248,13 @@ def _generate_ui_element_description(
 ) -> str:
     """Generate a description for a given UI element with important information.
 
-    Args:
-      ui_element: UI elements for the current screen.
-      index: The numeric index for the UI element.
+      Args:
+        ui_element: UI elements for the current screen.
+        index: The numeric index for the UI element.
 
-    Returns:
-      The description for the UI element.
-    """
+      Returns:
+        The description for the UI element.
+      """
     element_description = f'UI element {index}: {{\"index\": {index}, '
     if ui_element.text:
         element_description += f'"text": "{ui_element.text}", '
@@ -283,13 +295,13 @@ def _generate_ui_elements_description_list(
 ) -> str:
     """Generate concise information for a list of UIElement.
 
-    Args:
-      ui_elements: UI elements for the current screen.
-      screen_width_height_px: The height and width of the screen in pixels.
+      Args:
+        ui_elements: UI elements for the current screen.
+        screen_width_height_px: The height and width of the screen in pixels.
 
-    Returns:
-      Concise information for each UIElement.
-    """
+      Returns:
+        Concise information for each UIElement.
+      """
     tree_info = ''
     for index, ui_element in enumerate(ui_elements):
         if cool_agent_utils.validate_ui_element(ui_element, screen_width_height_px):
@@ -305,15 +317,15 @@ def _action_selection_prompt(
 ) -> str:
     """Generate the prompt for the action selection.
 
-    Args:
-      goal: The current goal.
-      history: Summaries for previous steps.
-      ui_elements: A list of descriptions for the UI elements.
-      additional_guidelines: Task specific guidelines.
+      Args:
+        goal: The current goal.
+        history: Summaries for previous steps.
+        ui_elements: A list of descriptions for the UI elements.
+        additional_guidelines: Task specific guidelines.
 
-    Returns:
-      The text prompt for action selection that will be sent to gpt4v.
-    """
+      Returns:
+        The text prompt for action selection that will be sent to gpt4v.
+      """
     if history:
         history = '\n'.join(history)
     else:
@@ -342,16 +354,16 @@ def _summarize_prompt(
 ) -> str:
     """Generate the prompt for the summarization step.
 
-    Args:
-      action: Action picked.
-      reason: The reason to pick the action.
-      goal: The overall goal.
-      before_elements: Information for UI elements on the before screenshot.
-      after_elements: Information for UI elements on the after screenshot.
+      Args:
+        action: Action picked.
+        reason: The reason to pick the action.
+        goal: The overall goal.
+        before_elements: Information for UI elements on the before screenshot.
+        after_elements: Information for UI elements on the after screenshot.
 
-    Returns:
-      The text prompt for summarization that will be sent to gpt4v.
-    """
+      Returns:
+        The text prompt for summarization that will be sent to gpt4v.
+      """
     return SUMMARY_PROMPT_TEMPLATE.format(
         goal=goal,
         before_elements=before_elements,
@@ -369,25 +381,25 @@ class CoolAgent(base_agent.EnvironmentInteractingAgent):
             env: interface.AsyncEnv,
             llm: gemini_gemma_wrapper.GeminiGemmaWrapper,
             name: str = 'CoolAgent',
-            wait_after_action_seconds: float = 2.0,
+            wait_after_action_seconds: float | None = 2.0,
             run_log_dir: str | None = None,
             **kwargs,
     ):
         """Initializes a CoolAgent Agent.
 
-        Args:
-          env: The environment.
-          llm: The multimodal LLM wrapper.
-          name: The agent name.
-          wait_after_action_seconds: Seconds to wait for the screen to stablize
-            after executing an action
-          run_log_dir: Directory to save run artifacts for debugging.
-        """
-        super().__init__(env, name)
+            Args:
+              env: The environment.
+              llm: The multimodal LLM wrapper.
+              name: The agent name.
+              wait_after_action_seconds: Seconds to wait for the screen to stablize
+                after executing an action. If None, uses the environment's auto-
+                stabilization logic.
+              run_log_dir: Directory to save run artifacts for debugging.
+            """
+        super().__init__(env, name, transition_pause=wait_after_action_seconds)
         self.llm = llm
         self.history = []
         self.additional_guidelines = None
-        self.wait_after_action_seconds = wait_after_action_seconds
         self.episode_state_action_history = set()
         self.run_log_dir = run_log_dir
         if self.run_log_dir:
@@ -584,14 +596,16 @@ class CoolAgent(base_agent.EnvironmentInteractingAgent):
                 'Can not execute the action, make sure to select the action with'
                 ' the required parameters (if any) in the correct JSON format!'
             )
+            self.history.append(step_data)
             return base_agent.AgentInteractionResult(
                 False,
                 step_data,
             )
 
-        time.sleep(self.wait_after_action_seconds)
+        # Use the waiting logic from the base class, which respects
+        # self.transition_pause and its 'auto' mode if set to None.
+        state = self.get_post_transition_state()
 
-        state = self.env.get_state(wait_to_stabilize=False)
         logical_screen_size = self.env.logical_screen_size
         orientation = self.env.orientation
         physical_frame_boundary = self.env.physical_frame_boundary

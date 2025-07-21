@@ -144,6 +144,7 @@ GUIDANCE = (
     ' the goal is something like "show me ...").\n'
     '- If the desired state is already achieved (e.g., enabling Wi-Fi when'
     " it's already on), you can just complete the task.\n"
+    '- If you are trying to click a button with a symbol on it, try to click on the symbol. Always try to click to the center of the button.'
     'Action Related:\n'
     '- Use the `open_app` action whenever possible to open an app. Do not use the'
     ' app drawer unless `open_app` has failed.\n'
@@ -695,9 +696,10 @@ class CoolAgent(base_agent.EnvironmentInteractingAgent):
                 ' summary.'
             )
             summary = (
-                f'I performed action `{action}` but the screen did not change. The'
-                ' action was ineffective. I need to re-evaluate and choose a'
-                ' different action.'
+                f'CRITICAL FAILURE: My last action `{action}` was **ineffective**'
+                ' because the screen did not change at all. I am stuck in a'
+                ' loop. I MUST abandon this approach and try a completely'
+                ' different action now. Repeating the same action is not an option.'
             )
             step_data['summary_prompt'] = (
                 'N/A - Summary overridden due to ineffective action.'

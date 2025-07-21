@@ -503,8 +503,7 @@ def generate_task_analysis_markdown(
             'of the related files, run logs of the agent, and also the screenshots '
             'of the steps of the agent. Debug the error/mistake and lay it out '
             'clearly, then propose solutions. The proposed solutions should be in '
-            'the format of full file changes, to accomodate direct copy and paste '
-            'from this chat to the IDE\n\n'
+            'the format of git diff changes, to accomodate easy fixes.\n\n'
         )
 
         # --- Task Summary ---

@@ -16,6 +16,10 @@
 
 import os
 import time
+import json
+import hashlib
+import re
+from collections import defaultdict, deque
 from pathlib import Path
 import cv2
 from android_world.agents import agent_utils
@@ -400,7 +404,12 @@ class CoolAgent(base_agent.EnvironmentInteractingAgent):
         self.llm = llm
         self.history = []
         self.additional_guidelines = None
-        self.episode_state_action_history = set()
+        # (fingerprint, action) → counter  (for single‑state repeats)
+        self._state_action_counter: defaultdict[tuple[str, str], int] = defaultdict(int)
+        # Store most‑recent (state,action) pairs to detect A‑B‑A cycles
+        self._recent_pairs: deque[tuple[str, str]] = deque(maxlen=8)
+        # Pairs that became "forbidden" after detecting an A‑B‑A pattern
+        self._blocked_pairs: set[tuple[str, str]] = set()
         self.set_run_log_dir(run_log_dir)
 
     def set_run_log_dir(self, run_log_dir: str | None) -> None:
@@ -420,7 +429,9 @@ class CoolAgent(base_agent.EnvironmentInteractingAgent):
         # Hide the coordinates on screen which might affect the vision model.
         self.env.hide_automation_ui()
         self.history = []
-        self.episode_state_action_history = set()
+        self._state_action_counter.clear()
+        self._recent_pairs.clear()
+        self._blocked_pairs.clear()
 
     def step(self, goal: str) -> base_agent.AgentInteractionResult:
         step_num = len(self.history) + 1
@@ -512,17 +523,37 @@ class CoolAgent(base_agent.EnvironmentInteractingAgent):
                 step_data,
             )
 
-        state_action_pair = (before_ui_elements_list, action)
-        if state_action_pair in self.episode_state_action_history:
-            print(f'LOOP DETECTED: Refusing to execute repetitive action: {action}')
+        # ------------------------------------------------------------------ #
+        # Improved loop detection                                            #
+        # ------------------------------------------------------------------ #
+        state_fingerprint = self._fingerprint_ui_state(before_ui_elements)
+        canonical_action = self._canonicalize_action(action)
+        state_action_pair = (state_fingerprint, canonical_action)
+        if state_action_pair in self._blocked_pairs:
+            print(f'LOOP DETECTED (A‑B‑A cycle): Blocked repetitive action: {action}')
             step_data['summary'] = (
-                'The agent suggested an action that it has already tried in this'
-                ' exact state earlier in the episode. To avoid a loop, no action'
-                ' was performed. Please suggest a different action.'
+                f'Action **disallowed** (part of an earlier A → B → A loop):\n'
+                f'```json\n{canonical_action}\n```\n'
+                'Please choose a different action.'
             )
             self.history.append(step_data)
             return base_agent.AgentInteractionResult(False, step_data)
-        self.episode_state_action_history.add(state_action_pair)
+
+        if self._state_action_counter[state_action_pair] >= self.MAX_SAME_ACTION_REPEATS:
+            print(f'LOOP DETECTED: Refusing to execute repetitive action: {action}')
+            step_data['summary'] = (
+                f'Action **disallowed** after {self.MAX_SAME_ACTION_REPEATS + 1} '
+                f'repeats in the same UI state:\n'
+                f'```json\n{canonical_action}\n```\n'
+                'Please pick another approach.'
+            )
+            self.history.append(step_data)
+            return base_agent.AgentInteractionResult(False, step_data)
+        # Record that we are attempting this pair once more.
+        self._state_action_counter[state_action_pair] += 1
+        # Save to recent list **before** execution so we record the exact order
+        self._recent_pairs.append(state_action_pair)
+        self._detect_two_cycle_loop()
 
         print('Action: ' + action)
         print('Reason: ' + reason)
@@ -711,3 +742,79 @@ class CoolAgent(base_agent.EnvironmentInteractingAgent):
             False,
             step_data,
         )
+
+    # ========================= #
+    #  Loop‑detection helpers   #
+    # ========================= #
+
+    @staticmethod
+    def _fingerprint_ui_state(
+        ui_elements: list[representation_utils.UIElement],
+    ) -> str:
+        """Return a stable MD5 fingerprint for the current UI.
+
+        Only semantic attributes are kept, and the list is sorted so that
+        element‑ordering changes (e.g. re‑layout, scrolling) do not break the
+        equality check.
+        """
+        canonical_elements = []
+        for el in ui_elements:
+            # Skip status‑bar text that changes every minute / % tick.
+            if CoolAgent._is_dynamic_text(el.text):
+                continue
+            canonical_elements.append(
+                (
+                    el.text or '',
+                    el.content_description or '',
+                    el.hint_text or '',
+                    el.tooltip or '',
+                    bool(el.is_selected),
+                    bool(el.is_checked),
+                )
+            )
+        canonical_elements.sort()
+        serialised = json.dumps(canonical_elements, separators=(',', ':'))
+        return hashlib.md5(serialised.encode('utf-8')).hexdigest()
+
+    # Regexes to match "14:23", "14:23:05", "11 PM" or "87%"
+    _DYNAMIC_TEXT_PATTERNS = [
+        re.compile(r'^\d{1,2}:\d{2}(:\d{2})?\s*(AM|PM)?$', re.I),
+        re.compile(r'^\d{1,3}%$'),
+    ]
+
+    MAX_SAME_ACTION_REPEATS = 2  # Allow one extra retry in same state.
+
+    @classmethod
+    def _is_dynamic_text(cls, text: str | None) -> bool:
+        if not text:
+            return False
+        for pat in cls._DYNAMIC_TEXT_PATTERNS:
+            if pat.match(text.strip()):
+                return True
+        return False
+
+    @staticmethod
+    def _canonicalize_action(raw_action: str) -> str:
+        """Return a canonical string representation of *any* action."""
+        extracted = agent_utils.extract_json(raw_action)
+        if extracted is None:
+            return raw_action.strip()
+        return json.dumps(extracted, sort_keys=True, separators=(',', ':'))
+
+    # ------------------------------------------------------------------ #
+    #  Two‑cycle (A,B,A,…) loop detector                                 #
+    # ------------------------------------------------------------------ #
+
+    def _detect_two_cycle_loop(self) -> None:
+        """Detects pattern (A,B,A) and permanently blocks pair B."""
+        if len(self._recent_pairs) < 3:
+            return
+        p_minus2, p_minus1, p_now = self._recent_pairs[-3], self._recent_pairs[-2], self._recent_pairs[-1]
+        # Pattern: A B A   (A != B)
+        if p_minus2 == p_now and p_minus2 != p_minus1:
+            if p_minus1 not in self._blocked_pairs:
+                print(
+                    '🔄 Detected alternating loop: '
+                    f'{p_minus2} ↔ {p_minus1}.  Blocking the second pair.'
+                )
+                self._blocked_pairs.add(p_minus1)

@@ -74,7 +74,7 @@ GEMINI_MODEL_CONFIGS = {
     "gemini-2.5-flash-lite-preview-06-17": {
         "rpm_limit": 15,
         "tpm_limit": 250000,
-        "rpd_limit": 1000,
+        "rpd_limit": 3000,
         "priority": 1,  # Highest priority due to best RPD limit
         "description": "Best for high-volume requests"
     },

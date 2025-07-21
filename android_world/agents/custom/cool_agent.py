@@ -233,16 +233,19 @@ SUMMARY_PROMPT_TEMPLATE = (
     'action was performed.\n'
     'This is the action you picked: {action}\n'
     'Based on the reason: {reason}\n\n'
-    'By comparing the two screenshots (and the UI element lists below), give a '
-    'brief, single-line summary of what happened. This summary will be '
-    'added to your action history, so it should be a useful memory. '
-    'Be critical: if the action did not work as you expected, say so.\n\n'
+    "By comparing the two screenshots (and UI element lists), provide a brief, "
+    "critical, single-line summary of the action's **outcome**. "
+    "State whether the outcome moved you closer to the goal. If the action "
+    "resulted in completing the goal, state that clearly.\n\n"
     'Here is the list for the before screenshot:\n{before_elements}\n'
     'Here is the list for the after screenshot:\n{after_elements}\n\n'
     '--- RULES ---\n'
-    '1. Keep it short (less than 50 words) and in a single line.\n'
-    '2. Your response MUST be a natural language sentence.\n'
-    '3. CRITICAL: Do NOT include JSON or actions in your summary.\n\n'
+    "1. Be brief and critical. Focus on the *outcome* of the action.\n"
+    "2. If the action did not work or the UI did not change as expected, "
+    "state that clearly.\n"
+    "3. If the action successfully completed the overall goal, say so.\n"
+    "4. Your response MUST be a natural language sentence and in a single line.\n"
+    "5. Do NOT include JSON or actions in your summary.\n\n"
     'Summary of this step: '
 )
 
@@ -749,7 +752,7 @@ class CoolAgent(base_agent.EnvironmentInteractingAgent):
 
     @staticmethod
     def _fingerprint_ui_state(
-        ui_elements: list[representation_utils.UIElement],
+            ui_elements: list[representation_utils.UIElement],
     ) -> str:
         """Return a stable MD5 fingerprint for the current UI.
 

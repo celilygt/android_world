@@ -57,7 +57,7 @@ APP_LIST_GUIDANCE = (
     '  * files: For managing files and folders. (app_name: "files")\n'
     '  * markor: For writing and editing notes in Markdown format. (app_name: "markor")\n'
     '  * clipper: For managing the clipboard. (app_name: "clipper")\n'
-    '  * messages: For sending and receiving SMS and MMS messages. (app_name: "messages")\n'
+    '  * simple sms messenger: For sending and receiving SMS and MMS messages. (app_name: "simple sms messenger")\n'
     '  * dialer: For making phone calls. (app_name: "dialer")\n'
     '  * simple calendar pro: For managing schedules, events, and appointments. (app_name: "simple calendar pro")\n'
     '  * simple gallery pro: For viewing and managing photos and videos. (app_name: "simple gallery pro")\n'

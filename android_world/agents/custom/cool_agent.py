@@ -167,6 +167,14 @@ GUIDANCE = (
     ' did not change, or a loop was detected, you MUST try a different action or strategy.'
     ' DO NOT REPEAT the failed action. Common alternative strategies include trying a'
     ' different button, using `navigate_back`, or scrolling.\n'
+    '- **STRATEGY RESETS**: If you find yourself in a sub-menu or a special mode (like'
+    ' text selection) and you cannot find the necessary action, do not immediately give'
+    ' up. Use `navigate_back` to exit the current context and return to a more'
+    ' general screen. Then, try a completely DIFFERENT approach. \n'
+    '- **LEARN FROM REPETITION**: For tasks that require repeating the same steps (e.g., deleting multiple items, adding several contacts),'
+    ' identify the successful sequence of actions for the first item and reuse it for the others. If searching for an item was more'
+    ' effective than scrolling, prefer searching for the next items as well. Avoid reverting to strategies that were less'
+    ' effective.\n'
     '- Use the `input_text` action whenever you want to type'
     ' something (including password) instead of clicking characters on the'
     ' keyboard one by one. Sometimes there is some default text in the text'
@@ -250,7 +258,7 @@ SUMMARY_PROMPT_TEMPLATE = (
     "1. Be brief and critical. Focus on the *outcome* of the action.\n"
     "2. If the action did not work or the UI did not change as expected, "
     "state that clearly.\n"
-    "3. If the action successfully completed the overall goal, say so.\n"
+    "3. If the action successfully completed the overall goal, SAY THAT OUT LOUD.\n"
     "4. Your response MUST be a natural language sentence and in a single line.\n"
     "5. Do NOT include JSON or actions in your summary.\n\n"
     'Summary of this step: '
@@ -688,9 +696,9 @@ class CoolAgent(base_agent.EnvironmentInteractingAgent):
             'navigate_back',
             'navigate_home',
         ]
-        ui_did_not_change = before_ui_elements == after_ui_elements
+        after_fingerprint = self._fingerprint_ui_state(after_ui_elements)
 
-        if is_ui_changing_action and ui_did_not_change:
+        if is_ui_changing_action and state_fingerprint == after_fingerprint:
             print(
                 'Action appears to have had no effect on the UI tree. Overriding'
                 ' summary.'

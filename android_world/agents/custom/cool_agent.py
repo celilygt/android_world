@@ -145,9 +145,16 @@ GUIDANCE = (
     ' the goal is something like "show me ...").\n'
     '- If the desired state is already achieved (e.g., enabling Wi-Fi when'
     " it's already on), you can just complete the task.\n"
+    '- If you are trying to click a button with a symbol on it, try to click on the symbol. Always try to click to the center of the button.'
     'Action Related:\n'
     '- Use the `open_app` action whenever possible to open an app. Do not use the'
     ' app drawer unless `open_app` has failed.\n'
+    '- **CAMERA USAGE**: When using the camera, ensure you are in the correct'
+    ' mode for your task (e.g., "photo" for taking a picture, "video" for'
+    ' recording). Check the screen for indicators like a camera icon (for photo'
+    ' mode) or a video camera icon/timer (for video mode). If you are in the'
+    ' wrong mode, you MUST switch before acting. Look for a "Mode" or "Switch"'
+    ' button, which might be labeled as "MODE LIST", to change to the correct setting.\n'
     '- **SETUP SCREENS**: When setting up new apps (like Chrome or an audio recorder), you'
     ' will often see setup screens. Your goal is to get to the main app screen. Decline'
     ' optional features like "sync" or "add account" unless the task requires them. If you'
@@ -161,6 +168,14 @@ GUIDANCE = (
     ' did not change, or a loop was detected, you MUST try a different action or strategy.'
     ' DO NOT REPEAT the failed action. Common alternative strategies include trying a'
     ' different button, using `navigate_back`, or scrolling.\n'
+    '- **STRATEGY RESETS**: If you find yourself in a sub-menu or a special mode (like'
+    ' text selection) and you cannot find the necessary action, do not immediately give'
+    ' up. Use `navigate_back` to exit the current context and return to a more'
+    ' general screen. Then, try a completely DIFFERENT approach. \n'
+    '- **LEARN FROM REPETITION**: For tasks that require repeating the same steps (e.g., deleting multiple items, adding several contacts),'
+    ' identify the successful sequence of actions for the first item and reuse it for the others. If searching for an item was more'
+    ' effective than scrolling, prefer searching for the next items as well. Avoid reverting to strategies that were less'
+    ' effective.\n'
     '- Use the `input_text` action whenever you want to type'
     ' something (including password) instead of clicking characters on the'
     ' keyboard one by one. Sometimes there is some default text in the text'
@@ -234,16 +249,19 @@ SUMMARY_PROMPT_TEMPLATE = (
     'action was performed.\n'
     'This is the action you picked: {action}\n'
     'Based on the reason: {reason}\n\n'
-    'By comparing the two screenshots (and the UI element lists below), give a '
-    'brief, single-line summary of what happened. This summary will be '
-    'added to your action history, so it should be a useful memory. '
-    'Be critical: if the action did not work as you expected, say so.\n\n'
+    "By comparing the two screenshots (and UI element lists), provide a brief, "
+    "critical, single-line summary of the action's **outcome**. "
+    "State whether the outcome moved you closer to the goal. If the action "
+    "resulted in completing the goal, state that clearly.\n\n"
     'Here is the list for the before screenshot:\n{before_elements}\n'
     'Here is the list for the after screenshot:\n{after_elements}\n\n'
     '--- RULES ---\n'
-    '1. Keep it short (less than 50 words) and in a single line.\n'
-    '2. Your response MUST be a natural language sentence.\n'
-    '3. CRITICAL: Do NOT include JSON or actions in your summary.\n\n'
+    "1. Be brief and critical. Focus on the *outcome* of the action.\n"
+    "2. If the action did not work or the UI did not change as expected, "
+    "state that clearly.\n"
+    "3. If the action successfully completed the overall goal, SAY THAT OUT LOUD.\n"
+    "4. Your response MUST be a natural language sentence and in a single line.\n"
+    "5. Do NOT include JSON or actions in your summary.\n\n"
     'Summary of this step: '
 )
 
@@ -679,17 +697,18 @@ class CoolAgent(base_agent.EnvironmentInteractingAgent):
             'navigate_back',
             'navigate_home',
         ]
-        ui_did_not_change = before_ui_elements == after_ui_elements
+        after_fingerprint = self._fingerprint_ui_state(after_ui_elements)
 
-        if is_ui_changing_action and ui_did_not_change:
+        if is_ui_changing_action and state_fingerprint == after_fingerprint:
             print(
                 'Action appears to have had no effect on the UI tree. Overriding'
                 ' summary.'
             )
             summary = (
-                f'I performed action `{action}` but the screen did not change. The'
-                ' action was ineffective. I need to re-evaluate and choose a'
-                ' different action.'
+                f'CRITICAL FAILURE: My last action `{action}` was **ineffective**'
+                ' because the screen did not change at all. I am stuck in a'
+                ' loop. I MUST abandon this approach and try a completely'
+                ' different action now. Repeating the same action is not an option.'
             )
             step_data['summary_prompt'] = (
                 'N/A - Summary overridden due to ineffective action.'
@@ -750,7 +769,7 @@ class CoolAgent(base_agent.EnvironmentInteractingAgent):
 
     @staticmethod
     def _fingerprint_ui_state(
-        ui_elements: list[representation_utils.UIElement],
+            ui_elements: list[representation_utils.UIElement],
     ) -> str:
         """Return a stable MD5 fingerprint for the current UI.
 

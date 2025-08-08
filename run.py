@@ -22,6 +22,7 @@ command-line flags.
 
 from collections.abc import Sequence
 import os
+import re
 import signal
 import sys
 from typing import Dict, Any
@@ -40,6 +41,8 @@ from android_world import suite_utils
 from android_world.agents import registry as agent_registry
 from android_world.task_evals import task_eval
 from android_world.agents import base_agent
+from android_world.agents.custom import cool_agent
+from android_world.agents.custom import cool_agent_utils
 from android_world.agents import human_agent
 from android_world.agents import infer
 from android_world.agents.llm_wrappers import gemini_gemma_wrapper
@@ -124,6 +127,12 @@ _N_TASK_COMBINATIONS = flags.DEFINE_integer(
     'n_task_combinations',
     1,
     'Number of task instances to run for each task template.',
+)
+
+_SKIP_TASKS = flags.DEFINE_list(
+    'skip_tasks',
+    [],
+    'A comma-separated list of task names to skip.',
 )
 
 _CHECKPOINT_DIR = flags.DEFINE_string(
@@ -274,7 +283,12 @@ def _get_agent(
     if _MAX_RETRY.value is not None:
         agent_kwargs['max_retry'] = _MAX_RETRY.value
     if _WAIT_AFTER_ACTION_SECONDS.value is not None:
-        agent_kwargs['wait_after_action_seconds'] = _WAIT_AFTER_ACTION_SECONDS.value
+        # Check for sentinel value to enable auto-wait (dynamic stabilization).
+        if _WAIT_AFTER_ACTION_SECONDS.value < 0:
+            agent_kwargs['wait_after_action_seconds'] = None
+            print('🔧 Using dynamic UI stabilization wait.')
+        else:
+            agent_kwargs['wait_after_action_seconds'] = _WAIT_AFTER_ACTION_SECONDS.value
     if _RUN_LOG_DIR.value is not None:
         agent_kwargs['run_log_dir'] = _RUN_LOG_DIR.value
 
@@ -304,6 +318,7 @@ def _get_agent(
             max_retry=_MAX_RETRY.value,
             enable_safety_checks=_ENABLE_SAFETY_CHECKS.value,
             verbose=_VERBOSE.value,
+            run_log_dir=_RUN_LOG_DIR.value,
         )
         agent_kwargs['llm'] = llm
 
@@ -362,6 +377,8 @@ def _main() -> None:
         use_identical_params=_FIXED_TASK_SEED.value,
     )
     suite.suite_family = _SUITE_FAMILY.value
+    if _SKIP_TASKS.value:
+        suite = {k: v for k, v in suite.items() if k not in _SKIP_TASKS.value}
 
     print("🤖 Initializing agent...")
     sys.stdout.flush()
@@ -375,7 +392,10 @@ def _main() -> None:
         # MiniWoB pages change quickly, don't need to wait for screen to stabilize.
         agent.transition_pause = _MINIWOB_TRANSITION_PAUSE
     else:
-        agent.transition_pause = None
+        # If not already set to None by the config, keep the agent's default.
+        # This allows the new config to take effect without breaking other agents.
+        if agent.transition_pause is not None:
+            agent.transition_pause = None
 
     if _CHECKPOINT_DIR.value:
         checkpoint_dir = _CHECKPOINT_DIR.value
@@ -405,6 +425,22 @@ def _main() -> None:
                 print(f"🎮 Max Steps: {int(task.complexity * 10)}")
                 print("=" * 80)
                 sys.stdout.flush()
+
+                # --- Per-task directory and logging setup ---
+                sanitized_task_name = re.sub(
+                    r'[^\w\s-]', '', task.name
+                ).strip().replace(' ', '_')
+                task_log_dir = os.path.join(checkpoint_dir, sanitized_task_name)
+                os.makedirs(task_log_dir, exist_ok=True)
+                print(f"📄 Logging artifacts for this task to: {task_log_dir}")
+
+                if isinstance(agent, cool_agent.CoolAgent):
+                    agent.set_run_log_dir(task_log_dir)
+                    if hasattr(agent, 'llm') and isinstance(
+                            agent.llm, gemini_gemma_wrapper.GeminiGemmaWrapper
+                    ):
+                        # Reconfigure logger to point to the new task-specific dir
+                        gemini_gemma_wrapper.configure_llm_logger(task_log_dir)
 
                 # Call original function but with enhanced episode runner
                 def enhanced_run_episode(task_arg):
@@ -451,6 +487,23 @@ def _main() -> None:
                 print(f"   Result: {'✅ Passed' if is_successful else '❌ Failed'}")
                 sys.stdout.flush()
 
+                # --- Generate per-task analysis markdown ---
+                if isinstance(agent, cool_agent.CoolAgent):
+                    dump_file_name = "cool_agent_dump.md"
+                    agent_code_dump_path = os.path.join(
+                        checkpoint_dir, dump_file_name
+                    )
+                    if os.path.exists(agent_code_dump_path):
+                        cool_agent_utils.generate_task_analysis_markdown(
+                            task_result=result,
+                            task_log_dir=task_log_dir,
+                            agent_code_dump_path=agent_code_dump_path,
+                        )
+                    else:
+                        print(
+                            '⚠️  Warning: Code dump file not found at'
+                            f' {agent_code_dump_path}. Skipping analysis markdown.'
+                        )
                 return result
 
             # Temporarily replace the function

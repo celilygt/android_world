@@ -14,7 +14,14 @@
 
 """A Multimodal Autonomous Agent for Android (M3A)."""
 
+import os
 import time
+import json
+import hashlib
+import re
+from collections import defaultdict, deque
+from pathlib import Path
+import cv2
 from android_world.agents import agent_utils
 from android_world.agents import base_agent
 from android_world.agents.llm_wrappers import gemini_gemma_wrapper
@@ -23,56 +30,98 @@ from android_world.env import interface
 from android_world.env import json_action
 from android_world.env import representation_utils
 
-PROMPT_PREFIX = (
-    'You are an agent who can operate an Android phone on behalf of a user.'
-    ' Based on user\'s goal/request, you may\n'
-    '- Answer back if the request/goal is a question (or a chat message),'
-    ' like user asks "What is my schedule for today?".\n'
-    '- Complete some tasks described in the requests/goals by'
-    ' performing actions (step by step) on the phone.\n\n'
-    'When given a user request, you will try to complete it step by step.'
-    ' At each step, you will be given the current screenshot (including the'
-    ' original screenshot and the same screenshot with bounding'
-    ' boxes and numeric indexes added to some UI elements) and a history of'
-    ' what you have done (in text). Based on these pieces of information and'
-    ' the goal, you must choose to perform one of the'
-    ' action in the following list (action description followed by the JSON'
-    ' format) by outputing the action in the correct JSON format.\n'
-    '- If you think the task has been completed, finish the task by using the'
-    ' status action with complete as goal_status:'
-    ' `{{\"action_type\": \"status\", \"goal_status\": \"complete\"}}`\n'
-    "- If you think the task is not feasible (including cases like you don't"
-    ' have enough information or can not perform some necessary actions),'
-    ' finish by using the `status` action with infeasible as goal_status:'
-    ' `{{\"action_type\": \"status\", \"goal_status\": \"infeasible\"}}`\n'
-    "- Answer user\'s question:"
-    ' `{{\"action_type\": \"answer\", \"text\": \"<answer_text>\"}}`\n'
-    '- Click/tap on an element on the screen. We have added marks (bounding'
-    ' boxes with numeric indexes on their TOP LEFT corner) to most of the UI'
-    ' elements in the screenshot, use the numeric index to indicate which'
-    ' element you want to click:'
-    ' `{{\"action_type\": \"click\", \"index\": <target_index>}}`.\n'
-    '- Long press on an element on the screen, similar with the click action'
-    ' above, use the numeric label on the bounding box to indicate which'
-    ' element you want to long press:'
-    ' `{{\"action_type\": \"long_press\", \"index\": <target_index>}}`.\n'
-    '- Type text into a text field (this action contains clicking the text'
-    ' field, typing in the text and pressing the enter, so no need to click on'
-    ' the target field to start), use the numeric label'
-    ' on the bounding box to indicate the target text field:'
-    ' `{{\"action_type\": \"input_text\", \"text\": <text_input>,'
-    ' \"index\": <target_index>}}`\n'
-    '- Press the Enter key: `{{\"action_type\": \"keyboard_enter\"}}`\n'
-    '- Navigate to the home screen: `{{\"action_type\": \"navigate_home\"}}`\n'
-    '- Navigate back: `{{\"action_type\": \"navigate_back\"}}`\n'
-    '- Scroll the screen or a scrollable UI element in one of the four'
-    ' directions, use the same numeric index as above if you want to scroll a'
-    ' specific UI element, leave it empty when scroll the whole screen:'
-    ' `{{\"action_type\": \"scroll\", \"direction\": <up, down, left, right>,'
-    ' \"index\": <optional_target_index>}}`\n'
+# MODIFICATION: Added a detailed list of openable applications to the prompt.
+# This provides the agent with explicit knowledge of which apps can be opened directly.
+# The 'app_name' values are chosen to be compatible with `adb_utils.launch_app`.
+APP_LIST_GUIDANCE = (
     '- Open an app (nothing will happen if the app is not'
-    ' installed): `{{\"action_type\": \"open_app\", \"app_name\": <name>}}`\n'
-    '- Wait for the screen to update: `{{\"action_type\": \"wait\"}}`\n'
+    ' installed): `{{\\"action_type\\": \\"open_app\\", \\"app_name\\": <name>}}`\n'
+    '  You have the ability to directly open the following applications. If the'
+    ' task description suggests using one of these apps, you should use this'
+    ' action as your first step. Use the exact "app_name" from this list.\n'
+    '  * google chrome: For browsing websites. (app_name: "chrome")\n'
+    '  * google chat: For messaging and collaboration. (app_name: "google chat")\n'
+    '  * settings: For changing device settings. (app_name: "settings")\n'
+    '  * youtube: For watching videos. (app_name: "youtube")\n'
+    '  * google play: For downloading apps and games. (app_name: "google play")\n'
+    '  * gmail: For sending and receiving emails. (app_name: "gmail")\n'
+    '  * google maps: For navigation and finding locations. (app_name: "google maps")\n'
+    '  * google photos: For viewing and managing photos. (app_name: "google photos")\n'
+    '  * google calendar: For managing schedules and events. (app_name: "google calendar")\n'
+    '  * camera: For taking photos and videos. (app_name: "camera")\n'
+    '  * audio recorder: For recording audio. (app_name: "audio recorder")\n'
+    '  * google drive: For storing and sharing files. (app_name: "google drive")\n'
+    '  * google keep: For taking notes and creating lists. (app_name: "google keep")\n'
+    '  * clock: For setting alarms and timers. (app_name: "clock")\n'
+    '  * contacts: For managing contacts. (app_name: "contacts")\n'
+    '  * files: For managing files and folders. (app_name: "files")\n'
+    '  * markor: For writing and editing notes in Markdown format. (app_name: "markor")\n'
+    '  * clipper: For managing the clipboard. (app_name: "clipper")\n'
+    '  * simple sms messenger: For sending and receiving SMS and MMS messages. (app_name: "simple sms messenger")\n'
+    '  * dialer: For making phone calls. (app_name: "dialer")\n'
+    '  * simple calendar pro: For managing schedules, events, and appointments. (app_name: "simple calendar pro")\n'
+    '  * simple gallery pro: For viewing and managing photos and videos. (app_name: "simple gallery pro")\n'
+    '  * miniwob: A specialized app for web-based tasks. (app_name: "miniwob")\n'
+    '  * simple draw pro: For drawing and sketching. (app_name: "simple draw pro")\n'
+    '  * pro expense: For tracking expenses. (app_name: "pro expense")\n'
+    '  * broccoli app: A recipe application. (app_name: "broccoli")\n'
+    '  * osmand: For maps and navigation. (app_name: "osmand")\n'
+    '  * tasks: For managing to-do lists. (app_name: "tasks")\n'
+    '  * open tracks sports tracker: For tracking sports activities. (app_name: "open tracks")\n'
+    '  * joplin: For taking notes and creating to-do lists. (app_name: "joplin")\n'
+    '  * vlc: For playing video files. (app_name: "vlc")\n'
+    '  * retro music: For listening to music. (app_name: "retro music")\n'
+)
+
+PROMPT_PREFIX = (
+        'You are an agent who can operate an Android phone on behalf of a user.'
+        ' Based on user\'s goal/request, you may\n'
+        '- Answer back if the request/goal is a question (or a chat message),'
+        ' like user asks "What is my schedule for today?".\n'
+        '- Complete some tasks described in the requests/goals by'
+        ' performing actions (step by step) on the phone.\n\n'
+        'When given a user request, you will try to complete it step by step.'
+        ' At each step, you will be given the current screenshot (including the'
+        ' original screenshot and the same screenshot with bounding'
+        ' boxes and numeric indexes added to some UI elements) and a history of'
+        ' what you have done (in text). Based on these pieces of information and'
+        ' the goal, you must choose to perform one of the'
+        ' action in the following list (action description followed by the JSON'
+        ' format) by outputing the action in the correct JSON format.\n'
+        '- If you think the task has been completed, finish the task by using the'
+        ' status action with complete as goal_status:'
+        ' `{{\\"action_type\\": \\"status\\", \\"goal_status\\": \\"complete\\"}}`\n'
+        "- If you think the task is not feasible (including cases like you don't"
+        ' have enough information or can not perform some necessary actions),'
+        ' finish by using the `status` action with infeasible as goal_status:'
+        ' `{{\\"action_type\\": \\"status\\", \\"goal_status\\": \\"infeasible\\"}}`\n'
+        "- Answer user\'s question:"
+        ' `{{\\"action_type\\": \\"answer\\", \\"text\\": \\"<answer_text>\\"}}\n'
+        '- Click/tap on an element on the screen. We have added marks (bounding'
+        ' boxes with numeric indexes on their TOP LEFT corner) to most of the UI'
+        ' elements in the screenshot, use the numeric index to indicate which'
+        ' element you want to click:'
+        ' `{{\\"action_type\\": \\"click\\", \\"index\\": <target_index>}}`.\n'
+        '- Long press on an element on the screen, similar with the click action'
+        ' above, use the numeric label on the bounding box to indicate which'
+        ' element you want to long press:'
+        ' `{{\\"action_type\\": \\"long_press\\", \\"index\\": <target_index>}}`.\n'
+        '- Type text into a text field (this action contains clicking the text'
+        ' field, typing in the text and pressing the enter, so no need to click on'
+        ' the target field to start), use the numeric label'
+        ' on the bounding box to indicate the target text field:'
+        ' `{{\\"action_type\\": \\"input_text\\", \\"text\\": <text_input>,'
+        ' \\"index\\": <target_index>}}`\n'
+        '- Press the Enter key: `{{\\"action_type\\": \\"keyboard_enter\\"}}`\n'
+        '- Navigate to the home screen: `{{\\"action_type\\": \\"navigate_home\\"}}`\n'
+        '- Navigate back: `{{\\"action_type\\": \\"navigate_back\\"}}`\n'
+        '- Scroll the screen or a scrollable UI element in one of the four'
+        ' directions, use the same numeric index as above if you want to scroll a'
+        ' specific UI element, leave it empty when scroll the whole screen:'
+        ' `{{\\"action_type\\": \\"scroll\\", \\"direction\\": <up, down, left, right>,'
+        ' \\"index\\": <optional_target_index>}}`\n'
+        + APP_LIST_GUIDANCE
+        + '- Wait for the screen to update: `{{\\"action_type\\": \\"wait\\"}}`\n'
 )
 
 GUIDANCE = (
@@ -81,24 +130,52 @@ GUIDANCE = (
     '- Usually there will be multiple ways to complete a task, pick the'
     ' easiest one. Also when something does not work as expected (due'
     ' to various reasons), sometimes a simple retry can solve the problem,'
+    '- Do not reply to messages from notifications' 
     " but if it doesn't (you can see that from the history),"
     ' SWITCH to other solutions.\n'
     '- Sometimes you may need to navigate the phone to gather information'
     ' needed to complete the task, for example if user asks'
     ' "what is my schedule tomorrow", then you may want to open the calendar'
     ' app (using the `open_app` action), look up information there, answer'
-    " user\'s question (using the `answer` action) and finish (using"
+    " user's question (using the `answer` action) and finish (using"
     ' the `status` action with complete as goal_status).\n'
     '- For requests that are questions (or chat messages), remember to use'
     ' the `answer` action to reply to user explicitly before finish!'
     ' Merely displaying the answer on the screen is NOT sufficient (unless'
     ' the goal is something like "show me ...").\n'
     '- If the desired state is already achieved (e.g., enabling Wi-Fi when'
-    " it\'s already on), you can just complete the task.\n"
+    " it's already on), you can just complete the task.\n"
+    '- If you are trying to click a button with a symbol on it, try to click on the symbol. Always try to click to the center of the button.'
     'Action Related:\n'
-    '- Use the `open_app` action whenever you want to open an app'
-    ' (nothing will happen if the app is not installed), do not use the'
-    ' app drawer to open an app unless all other ways have failed.\n'
+    '- Use the `open_app` action whenever possible to open an app. Do not use the'
+    ' app drawer unless `open_app` has failed.\n'
+    '- **CAMERA USAGE**: When using the camera, ensure you are in the correct'
+    ' mode for your task (e.g., "photo" for taking a picture, "video" for'
+    ' recording). Check the screen for indicators like a camera icon (for photo'
+    ' mode) or a video camera icon/timer (for video mode). If you are in the'
+    ' wrong mode, you MUST switch before acting. Look for a "Mode" or "Switch"'
+    ' button, which might be labeled as "MODE LIST", to change to the correct setting.\n'
+    '- **SETUP SCREENS**: When setting up new apps (like Chrome or an audio recorder), you'
+    ' will often see setup screens. Your goal is to get to the main app screen. Decline'
+    ' optional features like "sync" or "add account" unless the task requires them. If you'
+    ' cannot perform a primary action (like typing a custom filename) on a setup screen,'
+    ' look for an "Apply", "Done", or "OK" button to exit the setup. You can often perform'
+    ' the action later on the main screen.\n'
+    '- **CRITICAL REASONING**: After an action, carefully observe the new screen to see what'
+    ' *actually* happened. Do not assume the action did what you expected. For example,'
+    ' clicking a "Record" button might start a timer, not open a "Save" dialog.\n'
+    '- **AVOID LOOPS**: If the history says your last action was ineffective, the screen'
+    ' did not change, or a loop was detected, you MUST try a different action or strategy.'
+    ' DO NOT REPEAT the failed action. Common alternative strategies include trying a'
+    ' different button, using `navigate_back`, or scrolling.\n'
+    '- **STRATEGY RESETS**: If you find yourself in a sub-menu or a special mode (like'
+    ' text selection) and you cannot find the necessary action, do not immediately give'
+    ' up. Use `navigate_back` to exit the current context and return to a more'
+    ' general screen. Then, try a completely DIFFERENT approach. \n'
+    '- **LEARN FROM REPETITION**: For tasks that require repeating the same steps (e.g., deleting multiple items, adding several contacts),'
+    ' identify the successful sequence of actions for the first item and reuse it for the others. If searching for an item was more'
+    ' effective than scrolling, prefer searching for the next items as well. Avoid reverting to strategies that were less'
+    ' effective.\n'
     '- Use the `input_text` action whenever you want to type'
     ' something (including password) instead of clicking characters on the'
     ' keyboard one by one. Sometimes there is some default text in the text'
@@ -110,7 +187,7 @@ GUIDANCE = (
     '- Consider exploring the screen by using the `scroll`'
     ' action with different directions to reveal additional content.\n'
     '- The direction parameter for the `scroll` action can be confusing'
-    " sometimes as it\'s opposite to swipe, for example, to view content at the"
+    " sometimes as it's opposite to swipe, for example, to view content at the"
     ' bottom, the `scroll` direction should be set to "down". It has been'
     ' observed that you have difficulties in choosing the correct direction, so'
     ' if one does not work, try the opposite as well.\n'
@@ -165,34 +242,27 @@ ACTION_SELECTION_PROMPT_TEMPLATE = (
 )
 
 SUMMARY_PROMPT_TEMPLATE = (
-        PROMPT_PREFIX
-        + '\nThe (overall) user goal/request is: {goal}\n'
-          'Now I want you to summerize the latest step.\n'
-          'You will be given the screenshot before you performed the action (which'
-          ' has a text label "before" on the bottom right), the action you chose'
-          ' (together with the reason) and the screenshot after the action was'
-          ' performed (which has a text label "after" on the bottom right).\n'
-          'Also here is the list of detailed information for some UI elements'
-          ' in the before screenshot:\n{before_elements}\n'
-          'Here is the list for the after screenshot:\n{after_elements}\n'
-          'This is the action you picked: {action}\n'
-          'Based on the reason: {reason}\n\n'
-          'By comparing the two screenshots (plus the UI element lists) and the'
-          ' action performed, give a brief summary of this step. This summary'
-          ' will be added to action history and used in future action selection,'
-          ' so try to include essential information you think that will be most'
-          ' useful for future action selections like what you'
-          ' intended to do, why, if it worked as expected, if not'
-          ' what might be the reason (be critical, the action/reason might be'
-          ' wrong), what should/should not be done next and so on. Some more'
-          ' rules/tips you should follow:\n'
-          '- Keep it short (better less than 50 words) and in a single line\n'
-          "- Some actions (like `answer`, `wait`) don\'t involve screen change,"
-          ' you can just assume they work as expected.\n'
-          '- Given this summary will be added into action history, it can be used as'
-          ' memory to include information that needs to be remembered, or shared'
-          ' between different apps.\n\n'
-          'Summary of this step: '
+    'You are an agent summarizing the last step taken on an Android phone. '
+    'Your overall goal is: {goal}\n\n'
+    'You will be given the screenshot before you performed the action, the '
+    'action you chose (with your reasoning), and the screenshot after the '
+    'action was performed.\n'
+    'This is the action you picked: {action}\n'
+    'Based on the reason: {reason}\n\n'
+    "By comparing the two screenshots (and UI element lists), provide a brief, "
+    "critical, single-line summary of the action's **outcome**. "
+    "State whether the outcome moved you closer to the goal. If the action "
+    "resulted in completing the goal, state that clearly.\n\n"
+    'Here is the list for the before screenshot:\n{before_elements}\n'
+    'Here is the list for the after screenshot:\n{after_elements}\n\n'
+    '--- RULES ---\n'
+    "1. Be brief and critical. Focus on the *outcome* of the action.\n"
+    "2. If the action did not work or the UI did not change as expected, "
+    "state that clearly.\n"
+    "3. If the action successfully completed the overall goal, SAY THAT OUT LOUD.\n"
+    "4. Your response MUST be a natural language sentence and in a single line.\n"
+    "5. Do NOT include JSON or actions in your summary.\n\n"
+    'Summary of this step: '
 )
 
 
@@ -201,13 +271,13 @@ def _generate_ui_element_description(
 ) -> str:
     """Generate a description for a given UI element with important information.
 
-    Args:
-      ui_element: UI elements for the current screen.
-      index: The numeric index for the UI element.
+      Args:
+        ui_element: UI elements for the current screen.
+        index: The numeric index for the UI element.
 
-    Returns:
-      The description for the UI element.
-    """
+      Returns:
+        The description for the UI element.
+      """
     element_description = f'UI element {index}: {{\"index\": {index}, '
     if ui_element.text:
         element_description += f'"text": "{ui_element.text}", '
@@ -248,13 +318,13 @@ def _generate_ui_elements_description_list(
 ) -> str:
     """Generate concise information for a list of UIElement.
 
-    Args:
-      ui_elements: UI elements for the current screen.
-      screen_width_height_px: The height and width of the screen in pixels.
+      Args:
+        ui_elements: UI elements for the current screen.
+        screen_width_height_px: The height and width of the screen in pixels.
 
-    Returns:
-      Concise information for each UIElement.
-    """
+      Returns:
+        Concise information for each UIElement.
+      """
     tree_info = ''
     for index, ui_element in enumerate(ui_elements):
         if cool_agent_utils.validate_ui_element(ui_element, screen_width_height_px):
@@ -270,15 +340,15 @@ def _action_selection_prompt(
 ) -> str:
     """Generate the prompt for the action selection.
 
-    Args:
-      goal: The current goal.
-      history: Summaries for previous steps.
-      ui_elements: A list of descriptions for the UI elements.
-      additional_guidelines: Task specific guidelines.
+      Args:
+        goal: The current goal.
+        history: Summaries for previous steps.
+        ui_elements: A list of descriptions for the UI elements.
+        additional_guidelines: Task specific guidelines.
 
-    Returns:
-      The text prompt for action selection that will be sent to gpt4v.
-    """
+      Returns:
+        The text prompt for action selection that will be sent to gpt4v.
+      """
     if history:
         history = '\n'.join(history)
     else:
@@ -307,16 +377,16 @@ def _summarize_prompt(
 ) -> str:
     """Generate the prompt for the summarization step.
 
-    Args:
-      action: Action picked.
-      reason: The reason to pick the action.
-      goal: The overall goal.
-      before_elements: Information for UI elements on the before screenshot.
-      after_elements: Information for UI elements on the after screenshot.
+      Args:
+        action: Action picked.
+        reason: The reason to pick the action.
+        goal: The overall goal.
+        before_elements: Information for UI elements on the before screenshot.
+        after_elements: Information for UI elements on the after screenshot.
 
-    Returns:
-      The text prompt for summarization that will be sent to gpt4v.
-    """
+      Returns:
+        The text prompt for summarization that will be sent to gpt4v.
+      """
     return SUMMARY_PROMPT_TEMPLATE.format(
         goal=goal,
         before_elements=before_elements,
@@ -334,33 +404,56 @@ class CoolAgent(base_agent.EnvironmentInteractingAgent):
             env: interface.AsyncEnv,
             llm: gemini_gemma_wrapper.GeminiGemmaWrapper,
             name: str = 'CoolAgent',
-            wait_after_action_seconds: float = 2.0,
+            wait_after_action_seconds: float | None = 2.0,
+            run_log_dir: str | None = None,
+            **kwargs,
     ):
         """Initializes a CoolAgent Agent.
 
-        Args:
-          env: The environment.
-          llm: The multimodal LLM wrapper.
-          name: The agent name.
-          wait_after_action_seconds: Seconds to wait for the screen to stablize
-            after executing an action
-        """
-        super().__init__(env, name)
+            Args:
+              env: The environment.
+              llm: The multimodal LLM wrapper.
+              name: The agent name.
+              wait_after_action_seconds: Seconds to wait for the screen to stablize
+                after executing an action. If None, uses the environment's auto-
+                stabilization logic.
+              run_log_dir: Directory to save run artifacts for debugging.
+            """
+        super().__init__(env, name, transition_pause=wait_after_action_seconds)
         self.llm = llm
         self.history = []
         self.additional_guidelines = None
-        self.wait_after_action_seconds = wait_after_action_seconds
+        # (fingerprint, action) → counter  (for single‑state repeats)
+        self._state_action_counter: defaultdict[tuple[str, str], int] = defaultdict(int)
+        # Store most‑recent (state,action) pairs to detect A‑B‑A cycles
+        self._recent_pairs: deque[tuple[str, str]] = deque(maxlen=8)
+        # Pairs that became "forbidden" after detecting an A‑B‑A pattern
+        self._blocked_pairs: set[tuple[str, str]] = set()
+        self.set_run_log_dir(run_log_dir)
+
+    def set_run_log_dir(self, run_log_dir: str | None) -> None:
+        """Sets the directory for saving run artifacts and re-initializes subdirs."""
+        self.run_log_dir = run_log_dir
+        if self.run_log_dir:
+            self.screenshot_dir = Path(self.run_log_dir) / 'screenshots'
+            self.screenshot_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            self.screenshot_dir = None
 
     def set_task_guidelines(self, task_guidelines: list[str]) -> None:
         self.additional_guidelines = task_guidelines
 
-    def reset(self, go_home_on_reset: bool = False):
-        super().reset(go_home_on_reset)
+    def reset(self, go_home: bool = False):
+        super().reset(go_home)
         # Hide the coordinates on screen which might affect the vision model.
         self.env.hide_automation_ui()
         self.history = []
+        self._state_action_counter.clear()
+        self._recent_pairs.clear()
+        self._blocked_pairs.clear()
 
     def step(self, goal: str) -> base_agent.AgentInteractionResult:
+        step_num = len(self.history) + 1
         step_data = {
             'raw_screenshot': None,
             'before_screenshot_with_som': None,
@@ -375,7 +468,7 @@ class CoolAgent(base_agent.EnvironmentInteractingAgent):
             'summary': None,
             'summary_raw_response': None,
         }
-        print('----------step ' + str(len(self.history) + 1))
+        print('----------step ' + str(step_num))
 
         state = self.get_post_transition_state()
         logical_screen_size = self.env.logical_screen_size
@@ -400,6 +493,12 @@ class CoolAgent(base_agent.EnvironmentInteractingAgent):
                     orientation,
                 )
         step_data['before_screenshot_with_som'] = before_screenshot.copy()
+
+        if self.screenshot_dir:
+            raw_path = self.screenshot_dir / f'{step_num}_before_raw.png'
+            cv2.imwrite(str(raw_path), state.pixels.copy())
+            marked_path = self.screenshot_dir / f'{step_num}_before_marked.png'
+            cv2.imwrite(str(marked_path), before_screenshot)
 
         action_prompt = _action_selection_prompt(
             goal,
@@ -430,8 +529,6 @@ class CoolAgent(base_agent.EnvironmentInteractingAgent):
 
         reason, action = cool_agent_utils.parse_reason_action_output(action_output)
 
-        # If the output is not in the right format, add it to step summary which
-        # will be passed to next step and return.
         if (not reason) or (not action):
             print('Action prompt output is not in the correct format.')
             step_data['summary'] = (
@@ -444,6 +541,38 @@ class CoolAgent(base_agent.EnvironmentInteractingAgent):
                 False,
                 step_data,
             )
+
+        # ------------------------------------------------------------------ #
+        # Improved loop detection                                            #
+        # ------------------------------------------------------------------ #
+        state_fingerprint = self._fingerprint_ui_state(before_ui_elements)
+        canonical_action = self._canonicalize_action(action)
+        state_action_pair = (state_fingerprint, canonical_action)
+        if state_action_pair in self._blocked_pairs:
+            print(f'LOOP DETECTED (A‑B‑A cycle): Blocked repetitive action: {action}')
+            step_data['summary'] = (
+                f'Action **disallowed** (part of an earlier A → B → A loop):\n'
+                f'```json\n{canonical_action}\n```\n'
+                'Please choose a different action.'
+            )
+            self.history.append(step_data)
+            return base_agent.AgentInteractionResult(False, step_data)
+
+        if self._state_action_counter[state_action_pair] >= self.MAX_SAME_ACTION_REPEATS:
+            print(f'LOOP DETECTED: Refusing to execute repetitive action: {action}')
+            step_data['summary'] = (
+                f'Action **disallowed** after {self.MAX_SAME_ACTION_REPEATS + 1} '
+                f'repeats in the same UI state:\n'
+                f'```json\n{canonical_action}\n```\n'
+                'Please pick another approach.'
+            )
+            self.history.append(step_data)
+            return base_agent.AgentInteractionResult(False, step_data)
+        # Record that we are attempting this pair once more.
+        self._state_action_counter[state_action_pair] += 1
+        # Save to recent list **before** execution so we record the exact order
+        self._recent_pairs.append(state_action_pair)
+        self._detect_two_cycle_loop()
 
         print('Action: ' + action)
         print('Reason: ' + reason)
@@ -482,13 +611,14 @@ class CoolAgent(base_agent.EnvironmentInteractingAgent):
                     f' UI element list only has {num_ui_elements} elements.'
                 )
                 step_data['summary'] = (
-                    'The parameter index is out of range. Remember the index must be in'
-                    ' the UI element list!'
+                    f'Action failed: The generated index {action_index} is invalid. '
+                    f'The number of available UI elements is {num_ui_elements}, so the'
+                    f' index must be between 0 and {num_ui_elements - 1}. Please'
+                    ' choose a valid index from the provided list.'
                 )
                 self.history.append(step_data)
                 return base_agent.AgentInteractionResult(False, step_data)
 
-            # Add mark to the target element.
             cool_agent_utils.add_ui_element_mark(
                 step_data['raw_screenshot'],
                 before_ui_elements[action_index],
@@ -520,14 +650,16 @@ class CoolAgent(base_agent.EnvironmentInteractingAgent):
                 'Can not execute the action, make sure to select the action with'
                 ' the required parameters (if any) in the correct JSON format!'
             )
+            self.history.append(step_data)
             return base_agent.AgentInteractionResult(
                 False,
                 step_data,
             )
 
-        time.sleep(self.wait_after_action_seconds)
+        # Use the waiting logic from the base class, which respects
+        # self.transition_pause and its 'auto' mode if set to None.
+        state = self.get_post_transition_state()
 
-        state = self.env.get_state(wait_to_stabilize=False)
         logical_screen_size = self.env.logical_screen_size
         orientation = self.env.orientation
         physical_frame_boundary = self.env.physical_frame_boundary
@@ -546,6 +678,9 @@ class CoolAgent(base_agent.EnvironmentInteractingAgent):
                     physical_frame_boundary,
                     orientation,
                 )
+        if self.screenshot_dir:
+            after_marked_path = self.screenshot_dir / f'{step_num}_after_marked.png'
+            cv2.imwrite(str(after_marked_path), after_screenshot)
 
         cool_agent_utils.add_screenshot_label(
             step_data['before_screenshot_with_som'], 'before'
@@ -553,47 +688,153 @@ class CoolAgent(base_agent.EnvironmentInteractingAgent):
         cool_agent_utils.add_screenshot_label(after_screenshot, 'after')
         step_data['after_screenshot_with_som'] = after_screenshot.copy()
 
-        summary_prompt = _summarize_prompt(
-            action,
-            reason,
-            goal,
-            before_ui_elements_list,
-            after_ui_elements_list,
-        )
-        summary, is_safe, raw_response = self.llm.predict_mm(
-            summary_prompt,
-            [
-                before_screenshot,
-                after_screenshot,
-            ],
-        )
+        is_ui_changing_action = converted_action.action_type in [
+            'click',
+            'long_press',
+            'input_text',
+            'scroll',
+            'keyboard_enter',
+            'navigate_back',
+            'navigate_home',
+        ]
+        after_fingerprint = self._fingerprint_ui_state(after_ui_elements)
 
-        if is_safe == False:  # pylint: disable=singleton-comparison
-            #  is_safe could be None
-            summary = '"""Summary triggered LLM safety classifier."""'
-
-        if not raw_response:
+        if is_ui_changing_action and state_fingerprint == after_fingerprint:
             print(
-                'Error calling LLM in summarization phase. This should not happen: '
-                f'{summary}'
+                'Action appears to have had no effect on the UI tree. Overriding'
+                ' summary.'
             )
-            step_data['summary'] = (
-                    'Some error occurred calling LLM during summarization phase: %s'
-                    % summary
+            summary = (
+                f'CRITICAL FAILURE: My last action `{action}` was **ineffective**'
+                ' because the screen did not change at all. I am stuck in a'
+                ' loop. I MUST abandon this approach and try a completely'
+                ' different action now. Repeating the same action is not an option.'
             )
-            self.history.append(step_data)
-            return base_agent.AgentInteractionResult(
-                False,
-                step_data,
+            step_data['summary_prompt'] = (
+                'N/A - Summary overridden due to ineffective action.'
+            )
+            step_data['summary'] = f'Action selected: {action}. {summary}'
+            step_data['summary_raw_response'] = (
+                'Summary overridden by ineffective action detector.'
+            )
+            print('Summary: ' + summary)
+        else:
+            summary_prompt = _summarize_prompt(
+                action,
+                reason,
+                goal,
+                before_ui_elements_list,
+                after_ui_elements_list,
+            )
+            summary, is_safe, raw_response = self.llm.predict_mm(
+                summary_prompt,
+                [
+                    step_data['before_screenshot_with_som'],
+                    after_screenshot,
+                ],
             )
 
-        step_data['summary_prompt'] = summary_prompt
-        step_data['summary'] = f'Action selected: {action}. {summary}'
-        print('Summary: ' + summary)
-        step_data['summary_raw_response'] = raw_response
+            if is_safe == False:  # pylint: disable=singleton-comparison
+                summary = '"""Summary triggered LLM safety classifier."""'
+
+            if not raw_response:
+                print(
+                    'Error calling LLM in summarization phase. This should not happen: '
+                    f'{summary}'
+                )
+                step_data['summary'] = (
+                        'Some error occurred calling LLM during summarization phase: %s'
+                        % summary
+                )
+                self.history.append(step_data)
+                return base_agent.AgentInteractionResult(
+                    False,
+                    step_data,
+                )
+
+            step_data['summary_prompt'] = summary_prompt
+            step_data['summary'] = f'Action selected: {action}. {summary}'
+            print('Summary: ' + summary)
+            step_data['summary_raw_response'] = raw_response
 
         self.history.append(step_data)
         return base_agent.AgentInteractionResult(
             False,
             step_data,
         )
+
+    # ========================= #
+    #  Loop‑detection helpers   #
+    # ========================= #
+
+    @staticmethod
+    def _fingerprint_ui_state(
+            ui_elements: list[representation_utils.UIElement],
+    ) -> str:
+        """Return a stable MD5 fingerprint for the current UI.
+
+        Only semantic attributes are kept, and the list is sorted so that
+        element‑ordering changes (e.g. re‑layout, scrolling) do not break the
+        equality check.
+        """
+        canonical_elements = []
+        for el in ui_elements:
+            # Skip status‑bar text that changes every minute / % tick.
+            if CoolAgent._is_dynamic_text(el.text):
+                continue
+            canonical_elements.append(
+                (
+                    el.text or '',
+                    el.content_description or '',
+                    el.hint_text or '',
+                    el.tooltip or '',
+                    bool(el.is_selected),
+                    bool(el.is_checked),
+                )
+            )
+        canonical_elements.sort()
+        serialised = json.dumps(canonical_elements, separators=(',', ':'))
+        return hashlib.md5(serialised.encode('utf-8')).hexdigest()
+
+    # Regexes to match "14:23", "14:23:05", "11 PM" or "87%"
+    _DYNAMIC_TEXT_PATTERNS = [
+        re.compile(r'^\d{1,2}:\d{2}(:\d{2})?\s*(AM|PM)?$', re.I),
+        re.compile(r'^\d{1,3}%$'),
+    ]
+
+    MAX_SAME_ACTION_REPEATS = 2  # Allow one extra retry in same state.
+
+    @classmethod
+    def _is_dynamic_text(cls, text: str | None) -> bool:
+        if not text:
+            return False
+        for pat in cls._DYNAMIC_TEXT_PATTERNS:
+            if pat.match(text.strip()):
+                return True
+        return False
+
+    @staticmethod
+    def _canonicalize_action(raw_action: str) -> str:
+        """Return a canonical string representation of *any* action."""
+        extracted = agent_utils.extract_json(raw_action)
+        if extracted is None:
+            return raw_action.strip()
+        return json.dumps(extracted, sort_keys=True, separators=(',', ':'))
+
+    # ------------------------------------------------------------------ #
+    #  Two‑cycle (A,B,A,…) loop detector                                 #
+    # ------------------------------------------------------------------ #
+
+    def _detect_two_cycle_loop(self) -> None:
+        """Detects pattern (A,B,A) and permanently blocks pair B."""
+        if len(self._recent_pairs) < 3:
+            return
+        p_minus2, p_minus1, p_now = self._recent_pairs[-3], self._recent_pairs[-2], self._recent_pairs[-1]
+        # Pattern: A B A   (A != B)
+        if p_minus2 == p_now and p_minus2 != p_minus1:
+            if p_minus1 not in self._blocked_pairs:
+                print(
+                    '🔄 Detected alternating loop: '
+                    f'{p_minus2} ↔ {p_minus1}.  Blocking the second pair.'
+                )
+                self._blocked_pairs.add(p_minus1)
